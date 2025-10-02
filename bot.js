@@ -1,4 +1,4 @@
-// bot.js — логика бота: умное меню, админ-чат, модерация, публикация любых медиа
+// bot.js — логика бота: админ-чат, умное меню, модерация, публикация любых медиа
 import { Telegraf, Markup } from "telegraf";
 
 export function createBot(env) {
@@ -13,8 +13,10 @@ export function createBot(env) {
 
   // ===== STATE =====
   const awaitingTopic = new Set();        // кто сейчас пишет тему
-  const pendingRejections = new Map();    // replyPromptMsgId -> { authorId, modMsgId, modText }
-  const pendingSubmissions = new Map();   // controlMsgId -> { srcChatId, srcMsgId, authorId, adminCopyMsgId }
+  // replyMsgId -> { authorId, modMsgId, modText }
+  const pendingRejections = new Map();
+  // controlMsgId -> { srcChatId, srcMsgId, authorId, adminCopyMsgId }
+  const pendingSubmissions = new Map();
 
   // ===== Helpers =====
   const isOldQueryError = (e) =>
@@ -28,7 +30,8 @@ export function createBot(env) {
       const m = await ctx.telegram.getChatMember(CHANNEL_ID, uid);
       return ["member", "administrator", "creator"].includes(m.status);
     } catch {
-      return false; // если бот не может проверить (нет прав в канале) — считаем не участником
+      // если бот не может проверить (нет прав в канале) — считаем не участником
+      return false;
     }
   }
 
@@ -41,7 +44,7 @@ export function createBot(env) {
     }
   }
 
-  // ===== Служебные команды (помогают настроить админ-чат) =====
+  // ===== Служебные команды =====
   // /id — вернёт chat.id (удобно, чтобы выставить ADMIN_CHAT_ID)
   bot.command("id", async (ctx) => {
     await ctx.reply(`chat.id = ${ctx.chat.id}`);
@@ -56,10 +59,35 @@ export function createBot(env) {
   // ===== Запрос доступа =====
   bot.hears("🔓 Запросить доступ в канал", async (ctx) => {
     try {
+      // Проверим статус заранее
+      const member = await ctx.telegram.getChatMember(CHANNEL_ID, ctx.from.id).catch(() => null);
+
+      if (member?.status === "kicked") {
+        await ctx.reply("❌ Вы в списке заблокированных. Напишите администратору, чтобы вас разблокировали.");
+        // кнопка для модераторов «Разблокировать»
+        await ctx.telegram.sendMessage(
+          ADMIN_CHAT_ID,
+          `🛑 Запрос доступа от заблокированного пользователя @${ctx.from.username || ctx.from.id} (id: ${ctx.from.id})`,
+          {
+            reply_markup: {
+              inline_keyboard: [[
+                { text: "🔓 Разблокировать", callback_data: JSON.stringify({ t: "unban", uid: ctx.from.id }) }
+              ]]
+            }
+          }
+        );
+        return;
+      }
+
+      if (["member", "administrator", "creator"].includes(member?.status)) {
+        await ctx.reply("✅ Вы уже участник канала. Можете предлагать темы.", memberMenu());
+        return;
+      }
+
+      // Создаём инвайт-ссылку без срока жизни (создаёт join request)
       const link = await ctx.telegram.createChatInviteLink(CHANNEL_ID, {
         creates_join_request: true,
-        name: `req_${ctx.from.id}_${Date.now()}`,
-        expire_date: Math.floor(Date.now() / 1000) + 3600 // 1 час
+        name: `req_${ctx.from.id}_${Date.now()}`
       });
 
       await ctx.reply(
@@ -81,6 +109,7 @@ export function createBot(env) {
   bot.on("chat_join_request", async (ctx) => {
     const req = ctx.update.chat_join_request;
     const user = req.from;
+
     const dataApprove = JSON.stringify({ t: "approve", cid: req.chat.id, uid: user.id });
     const dataDecline = JSON.stringify({ t: "decline", cid: req.chat.id, uid: user.id });
 
@@ -109,6 +138,20 @@ export function createBot(env) {
       }
 
       const payload = JSON.parse(ctx.update.callback_query.data || "{}");
+
+      // --- Unban (разблокировать пользователя) ---
+      if (payload.t === "unban") {
+        try {
+          await ctx.telegram.unbanChatMember(CHANNEL_ID, payload.uid);
+          await ctx.editMessageReplyMarkup(); // убрать кнопку
+          try {
+            await ctx.telegram.sendMessage(payload.uid, "✅ Вы разблокированы. Нажмите «Запросить доступ» ещё раз.");
+          } catch {}
+        } catch (e) {
+          console.error("unban error:", e);
+        }
+        return;
+      }
 
       // --- Одобрить/Отклонить заявку в канал ---
       if (payload.t === "approve") {
@@ -146,7 +189,7 @@ export function createBot(env) {
           return;
         }
 
-        // fallback: на случай старых карточек
+        // fallback: на случай очень старых карточек
         const adminMsg = ctx.update.callback_query.message;
         await ctx.telegram.copyMessage(CHANNEL_ID, ADMIN_CHAT_ID, adminMsg.message_id);
         await ctx.editMessageReplyMarkup();
@@ -154,19 +197,35 @@ export function createBot(env) {
         return;
       }
 
-      // --- Отклонение темы с причиной ---
+      // --- Отклонение темы с причиной (устойчивые ответы) ---
       if (payload.t === "reject") {
-        const modMsg = ctx.update.callback_query.message;
+        const controlMsg = ctx.update.callback_query.message; // карточка с кнопками
+
+        // Подсказка «напишите причину» с reply на карточку
         const prompt = await ctx.telegram.sendMessage(
           ADMIN_CHAT_ID,
           "✍️ Напишите причину отклонения ответом на ЭТО сообщение (только текст).",
-          { reply_to_message_id: modMsg.message_id }
+          { reply_to_message_id: controlMsg.message_id }
         );
-        pendingRejections.set(prompt.message_id, {
+
+        // Базовые данные для отклонения
+        const entry = {
           authorId: payload.uid,
-          modMsgId: modMsg.message_id,
-          modText: modMsg.text || ""
-        });
+          modMsgId: controlMsg.message_id,
+          modText: controlMsg.text || ""
+        };
+
+        // Примем ответ, если модератор ответит на:
+        // 1) подсказку,
+        pendingRejections.set(prompt.message_id, entry);
+        // 2) карточку с кнопками,
+        pendingRejections.set(controlMsg.message_id, entry);
+        // 3) скопированный оригинал автора (если есть привязка)
+        const binding = pendingSubmissions.get(controlMsg.message_id);
+        if (binding?.adminCopyMsgId) {
+          pendingRejections.set(binding.adminCopyMsgId, entry);
+        }
+
         return;
       }
 
@@ -203,41 +262,49 @@ export function createBot(env) {
         const replyTo = ctx.message?.reply_to_message;
         if (replyTo) {
           const key = replyTo.message_id;
-          if (pendingRejections.has(key)) {
+          const entry = pendingRejections.get(key);
+          if (entry) {
             if (!("text" in ctx.message)) {
               await ctx.reply("Нужен текст. Напишите причину одним сообщением.", {
                 reply_to_message_id: replyTo.message_id
               });
               return;
             }
-            const { authorId, modMsgId, modText } = pendingRejections.get(key);
-            pendingRejections.delete(key);
 
+            const { authorId, modMsgId, modText } = entry;
             const reason = ctx.message.text.trim();
 
-            // уведомляем автора
+            // 1) уведомляем автора
+            let sentToAuthor = true;
             try {
               await ctx.telegram.sendMessage(
                 authorId,
                 `❌ Ваша тема отклонена.\nПричина: ${reason}`
               );
-            } catch {}
-
-            // снимаем кнопки и помечаем карточку
-            try {
-              await ctx.telegram.editMessageReplyMarkup(ADMIN_CHAT_ID, modMsgId, undefined, {
-                inline_keyboard: []
-              });
-              const updatedText = (modText || "📝 Тема") + `\n\n🚫 Отклонено. Причина: ${reason}`;
-              await ctx.telegram.editMessageText(ADMIN_CHAT_ID, modMsgId, undefined, updatedText);
             } catch (e) {
-              console.error("edit reject card error:", e);
+              sentToAuthor = false;
+              await ctx.reply("⚠️ Не удалось отправить причину автору (возможно, закрыты ЛС боту).");
             }
 
-            // если была связь с исходником — чистим
+            // 2) снимаем кнопки и помечаем карточку
+            try {
+              await ctx.telegram.editMessageReplyMarkup(ADMIN_CHAT_ID, modMsgId, undefined, { inline_keyboard: [] });
+              const updatedText = (modText || "📝 Тема") + `\n\n🚫 Отклонено. Причина: ${reason}`;
+              await ctx.telegram.editMessageText(ADMIN_CHAT_ID, modMsgId, undefined, updatedText);
+            } catch {
+              // если карточка была не текстовой — добавим отдельным сообщением
+              await ctx.telegram.sendMessage(ADMIN_CHAT_ID, `🚫 Отклонено. Причина: ${reason}`, {
+                reply_to_message_id: modMsgId
+              });
+            }
+
+            // 3) подчистим все ключи, связанные с этой карточкой
+            for (const [k, v] of pendingRejections.entries()) {
+              if (v.modMsgId === modMsgId) pendingRejections.delete(k);
+            }
             pendingSubmissions.delete(modMsgId);
 
-            await ctx.reply("✅ Причина отправлена автору. Отклонение зафиксировано.");
+            await ctx.reply(`✅ Отклонение зафиксировано.${sentToAuthor ? "" : " (Автору не доставлено)"}`);
             return;
           }
         }
@@ -268,7 +335,7 @@ export function createBot(env) {
         // копируем ОРИГИНАЛ (любой тип) в админ-чат
         const copied = await ctx.telegram.copyMessage(ADMIN_CHAT_ID, srcChatId, srcMsgId);
 
-        // карточка модерации (видна всем в админ-чате; любой может нажать)
+        // карточка модерации (любой модератор может нажать)
         const cbData = (t) => JSON.stringify({ t, uid: ctx.from.id });
         const control = await ctx.telegram.sendMessage(
           ADMIN_CHAT_ID,
