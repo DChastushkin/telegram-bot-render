@@ -7,7 +7,7 @@ import { createBot } from "./bot.js";
 const {
   BOT_TOKEN,
   CHANNEL_ID,     // -100xxxxxxxxxx или @username
-  ADMIN_CHAT_ID,  // ID админ-чата или вашего аккаунта
+  ADMIN_CHAT_ID,  // ID приватного админ-чата (число, например -1001234567890)
   APP_URL,        // https://<service>.onrender.com (Render -> Environment)
   PORT            // Render проставит сам
 } = process.env;

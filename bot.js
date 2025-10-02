@@ -1,4 +1,4 @@
-// bot.js — вся логика бота: умное меню, модерация, публикация медиа
+// bot.js — логика бота: умное меню, админ-чат, модерация, публикация любых медиа
 import { Telegraf, Markup } from "telegraf";
 
 export function createBot(env) {
@@ -6,8 +6,10 @@ export function createBot(env) {
   const bot = new Telegraf(BOT_TOKEN);
 
   // ===== UI (две разные клавиатуры) =====
-  const newUserMenu   = () => Markup.keyboard([["🔓 Запросить доступ в канал"]]).resize();
-  const memberMenu    = () => Markup.keyboard([["📝 Предложить тему/вопрос"]]).resize();
+  const newUserMenu = () =>
+    Markup.keyboard([["🔓 Запросить доступ в канал"]]).resize();
+  const memberMenu = () =>
+    Markup.keyboard([["📝 Предложить тему/вопрос"]]).resize();
 
   // ===== STATE =====
   const awaitingTopic = new Set();        // кто сейчас пишет тему
@@ -25,32 +27,29 @@ export function createBot(env) {
       const uid = userId ?? ctx.from?.id;
       const m = await ctx.telegram.getChatMember(CHANNEL_ID, uid);
       return ["member", "administrator", "creator"].includes(m.status);
-    } catch (e) {
-      // если бот не админ канала — проверить не получится
-      return false;
+    } catch {
+      return false; // если бот не может проверить (нет прав в канале) — считаем не участником
     }
   }
 
   async function showMenuByStatus(ctx) {
     const member = await isMember(ctx);
     if (member) {
-      await ctx.reply(
-        "Вы участник канала. Можете предложить тему.",
-        memberMenu()
-      );
+      await ctx.reply("Вы участник канала. Можете предложить тему.", memberMenu());
     } else {
-      await ctx.reply(
-        "Чтобы предлагать темы, запросите доступ в канал.",
-        newUserMenu()
-      );
+      await ctx.reply("Чтобы предлагать темы, запросите доступ в канал.", newUserMenu());
     }
   }
 
+  // ===== Служебные команды (помогают настроить админ-чат) =====
+  // /id — вернёт chat.id (удобно, чтобы выставить ADMIN_CHAT_ID)
+  bot.command("id", async (ctx) => {
+    await ctx.reply(`chat.id = ${ctx.chat.id}`);
+  });
+
   // ===== /start =====
   bot.start(async (ctx) => {
-    await ctx.reply(
-      "Привет! Я бот канала.",
-    );
+    await ctx.reply("Привет! Я бот канала.");
     await showMenuByStatus(ctx);
   });
 
@@ -99,22 +98,30 @@ export function createBot(env) {
     );
   });
 
-  // ===== Кнопки модерации =====
+  // ===== Кнопки модерации (только из админ-чата!) =====
   bot.on("callback_query", async (ctx) => {
     try {
       await ctx.answerCbQuery().catch(() => {});
+      // защита: принимать клики только из админ-чата
+      if (String(ctx.chat?.id) !== String(ADMIN_CHAT_ID)) {
+        await ctx.answerCbQuery("Нет доступа");
+        return;
+      }
+
       const payload = JSON.parse(ctx.update.callback_query.data || "{}");
 
-      // --- Одобрение/отклонение заявки в канал ---
+      // --- Одобрить/Отклонить заявку в канал ---
       if (payload.t === "approve") {
         await ctx.telegram.approveChatJoinRequest(payload.cid, payload.uid);
         await ctx.editMessageReplyMarkup();
         try {
           await ctx.telegram.sendMessage(payload.uid, "✅ Вам одобрен доступ в канал.");
-          // Показать меню участника сразу после одобрения
-          await ctx.telegram.sendMessage(payload.uid, "Добро пожаловать! Теперь вы можете предложить тему.", {
-            reply_markup: memberMenu().reply_markup
-          });
+          // Показать меню участника
+          await ctx.telegram.sendMessage(
+            payload.uid,
+            "Добро пожаловать! Теперь вы можете предложить тему.",
+            { reply_markup: memberMenu().reply_markup }
+          );
         } catch {}
         return;
       }
@@ -133,7 +140,7 @@ export function createBot(env) {
         if (binding) {
           const { srcChatId, srcMsgId, authorId } = binding;
           await ctx.telegram.copyMessage(CHANNEL_ID, srcChatId, srcMsgId);
-          await ctx.editMessageReplyMarkup();
+          await ctx.editMessageReplyMarkup(); // убрать кнопки
           try { await ctx.telegram.sendMessage(authorId, "✅ Ваша тема опубликована."); } catch {}
           pendingSubmissions.delete(controlMsg.message_id);
           return;
@@ -170,15 +177,11 @@ export function createBot(env) {
     }
   });
 
-  // ===== Кнопка «Предложить тему» =====
+  // ===== Кнопка «Предложить тему» (только для участников канала) =====
   bot.hears("📝 Предложить тему/вопрос", async (ctx) => {
-    // Пускаем ТОЛЬКО участников канала
     const member = await isMember(ctx);
     if (!member) {
-      await ctx.reply(
-        "❌ Вы ещё не участник канала. Сначала запросите доступ.",
-        newUserMenu()
-      );
+      await ctx.reply("❌ Вы ещё не участник канала. Сначала запросите доступ.", newUserMenu());
       return;
     }
     awaitingTopic.add(ctx.from.id);
@@ -240,9 +243,9 @@ export function createBot(env) {
         }
       }
 
-      // --- 2) Пользователь прислал тему (любой тип), но только если он в процессе ввода ---
+      // --- 2) Пользователь прислал тему (любой тип), если в процессе ввода ---
       if (awaitingTopic.has(ctx.from.id)) {
-        // доп. защита: проверим членство ещё раз (на случай, если выпал из канала)
+        // доп. защита: проверим членство ещё раз
         const member = await isMember(ctx);
         if (!member) {
           awaitingTopic.delete(ctx.from.id);
@@ -255,17 +258,17 @@ export function createBot(env) {
         const srcChatId = ctx.chat.id;
         const srcMsgId = ctx.message.message_id;
 
-        // отправим карточку автора
+        // информация об авторе (в админ-чат)
         const userInfo =
           `👤 От: @${ctx.from.username || "—"}\n` +
           `ID: ${ctx.from.id}\n` +
           `Имя: ${[ctx.from.first_name, ctx.from.last_name].filter(Boolean).join(" ") || "—"}`;
         await ctx.telegram.sendMessage(ADMIN_CHAT_ID, userInfo);
 
-        // скопируем ОРИГИНАЛ (любой тип) в админ-чат
+        // копируем ОРИГИНАЛ (любой тип) в админ-чат
         const copied = await ctx.telegram.copyMessage(ADMIN_CHAT_ID, srcChatId, srcMsgId);
 
-        // карточка модерации
+        // карточка модерации (видна всем в админ-чате; любой может нажать)
         const cbData = (t) => JSON.stringify({ t, uid: ctx.from.id });
         const control = await ctx.telegram.sendMessage(
           ADMIN_CHAT_ID,
@@ -280,7 +283,7 @@ export function createBot(env) {
           }
         );
 
-        // связываем с исходником
+        // связь карточки с исходником
         pendingSubmissions.set(control.message_id, {
           srcChatId,
           srcMsgId,
