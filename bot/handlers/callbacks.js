@@ -26,7 +26,8 @@ async function resolveChannelLink(ctx, CHANNEL_ID, CHANNEL_LINK) {
   return { link: null, title };
 }
 
-const ADVICE_HEADER = "Новое обращение от подписчика - требуется обратная связь";
+const ADVICE_HEADER  = "Новое обращение от подписчика - требуется обратная связь";
+const EXPRESS_HEADER = "Новая тема от подписчика";
 
 export function registerCallbackHandlers(bot, env) {
   const { CHANNEL_ID, ADMIN_CHAT_ID, CHANNEL_LINK } = env;
@@ -76,7 +77,11 @@ export function registerCallbackHandlers(bot, env) {
           const text = link
             ? `✅ Вам одобрен доступ в канал <a href="${link}">${esc(title)}</a>.`
             : `✅ Вам одобрен доступ в канал «${title}».`;
-          await ctx.telegram.sendMessage(p.uid, text, { parse_mode: "HTML", disable_web_page_preview: true, reply_markup: memberMenu().reply_markup });
+          await ctx.telegram.sendMessage(p.uid, text, {
+            parse_mode: "HTML",
+            disable_web_page_preview: true,
+            reply_markup: memberMenu().reply_markup
+          });
         } catch (e) { console.error("approve notify error:", e); }
         return;
       }
@@ -88,7 +93,7 @@ export function registerCallbackHandlers(bot, env) {
         return;
       }
 
-      // publish — один пост с заголовком (если нужен совет)
+      // publish — один пост с заголовком (для обоих типов)
       if (p.t === "publish") {
         const control = ctx.update.callback_query.message;
         const bind = pendingSubmissions.get(control.message_id);
@@ -96,24 +101,17 @@ export function registerCallbackHandlers(bot, env) {
         if (bind) {
           const { srcChatId, srcMsgId, authorId, intent, kind, supportsCaption, text } = bind;
 
-          if (intent === "advice") {
-            if (kind === "text") {
-              const combined = `${ADVICE_HEADER}\n\n${text || ""}`.trimEnd();
-              await ctx.telegram.sendMessage(CHANNEL_ID, combined);
-            } else if (supportsCaption) {
-              const caption = text ? `${ADVICE_HEADER}\n\n${text}` : ADVICE_HEADER;
-              await ctx.telegram.copyMessage(CHANNEL_ID, srcChatId, srcMsgId, { caption });
-            } else {
-              // тип без подписи (например, видео-кружок/стикер) — отправим только контент
-              await ctx.telegram.copyMessage(CHANNEL_ID, srcChatId, srcMsgId);
-            }
+          const header = intent === "advice" ? ADVICE_HEADER : EXPRESS_HEADER;
+
+          if (kind === "text") {
+            const combined = `${header}\n\n${text || ""}`.trimEnd();
+            await ctx.telegram.sendMessage(CHANNEL_ID, combined);
+          } else if (supportsCaption) {
+            const caption = text ? `${header}\n\n${text}` : header;
+            await ctx.telegram.copyMessage(CHANNEL_ID, srcChatId, srcMsgId, { caption });
           } else {
-            // без шапки
-            if (kind === "text") {
-              await ctx.telegram.sendMessage(CHANNEL_ID, text || "");
-            } else {
-              await ctx.telegram.copyMessage(CHANNEL_ID, srcChatId, srcMsgId);
-            }
+            // тип без подписи (например, video_note/стикер) — шлём только контент
+            await ctx.telegram.copyMessage(CHANNEL_ID, srcChatId, srcMsgId);
           }
 
           await ctx.editMessageReplyMarkup();
