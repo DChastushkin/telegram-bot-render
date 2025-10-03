@@ -2,7 +2,15 @@
 import express from "express";
 import { createBot } from "./bot/index.js";
 
-const { BOT_TOKEN, CHANNEL_ID, ADMIN_CHAT_ID, APP_URL, PORT } = process.env;
+const {
+  BOT_TOKEN,
+  CHANNEL_ID,
+  ADMIN_CHAT_ID,
+  CHANNEL_LINK, // <— опционально: например "https://t.me/your_channel"
+  APP_URL,
+  PORT
+} = process.env;
+
 if (!BOT_TOKEN || !CHANNEL_ID || !ADMIN_CHAT_ID) {
   console.error("❌ ENV нужны: BOT_TOKEN, CHANNEL_ID, ADMIN_CHAT_ID");
   process.exit(1);
@@ -11,7 +19,7 @@ if (!BOT_TOKEN || !CHANNEL_ID || !ADMIN_CHAT_ID) {
 const app = express();
 app.get("/", (_, res) => res.send("OK — bot is alive"));
 
-const bot = createBot({ BOT_TOKEN, CHANNEL_ID, ADMIN_CHAT_ID });
+const bot = createBot({ BOT_TOKEN, CHANNEL_ID, ADMIN_CHAT_ID, CHANNEL_LINK });
 
 const listenPort = Number(PORT) || 3000;
 app.listen(listenPort, () => console.log(`HTTP server listening on ${listenPort}`));
