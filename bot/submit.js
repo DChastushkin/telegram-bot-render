@@ -9,7 +9,7 @@ export const intentLabel = (intent) =>
  * 1) инфо об авторе
  * 2) копию исходного сообщения
  * 3) карточку модерации (publish/reject)
- * И сохраняет связь в pendingSubmissions (включая intent).
+ * И сохраняет связь в pendingSubmissions (включая intent и метаданные контента).
  */
 export async function submitDraftToModeration({ telegram, ADMIN_CHAT_ID }, { user, draft, intent }) {
   const userInfo =
@@ -41,6 +41,9 @@ export async function submitDraftToModeration({ telegram, ADMIN_CHAT_ID }, { use
     srcMsgId: draft.srcMsgId,
     authorId: user.id,
     adminCopyMsgId: copied.message_id,
-    intent
+    intent,
+    kind: draft.kind,
+    supportsCaption: draft.supportsCaption,
+    text: draft.text || ""
   });
 }

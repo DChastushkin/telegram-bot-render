@@ -1,14 +1,15 @@
 // bot/handlers/callbacks.js
 import { isOldQueryError } from "../utils.js";
 import { memberMenu } from "../ui.js";
-import { submitDraftToModeration, intentLabel } from "../submit.js";
+import { submitDraftToModeration } from "../submit.js";
 import {
   pendingSubmissions, pendingRejections, pendingRejectionsByAdmin, pendingDrafts
 } from "../state.js";
 
-// безопасный esc для HTML
+// esc для HTML
 const esc = (s = "") => String(s).replaceAll("&","&amp;").replaceAll("<","&lt;").replaceAll(">","&gt;");
 
+// строим ссылку на канал (как раньше)
 async function resolveChannelLink(ctx, CHANNEL_ID, CHANNEL_LINK) {
   let title = "канал";
   try {
@@ -16,19 +17,16 @@ async function resolveChannelLink(ctx, CHANNEL_ID, CHANNEL_LINK) {
     if (chat?.title) title = chat.title;
     if (CHANNEL_LINK) return { link: CHANNEL_LINK, title };
     if (chat?.username) return { link: `https://t.me/${chat.username}`, title };
+    try { const l = await ctx.telegram.exportChatInviteLink(CHANNEL_ID); if (l) return { link: l, title }; } catch {}
     try {
-      const primary = await ctx.telegram.exportChatInviteLink(CHANNEL_ID);
-      if (primary) return { link: primary, title };
-    } catch {}
-    try {
-      const inv = await ctx.telegram.createChatInviteLink(CHANNEL_ID, {
-        creates_join_request: true, name: `link_${Date.now()}`
-      });
+      const inv = await ctx.telegram.createChatInviteLink(CHANNEL_ID, { creates_join_request: true, name: `link_${Date.now()}` });
       if (inv?.invite_link) return { link: inv.invite_link, title };
     } catch {}
   } catch {}
   return { link: null, title };
 }
+
+const ADVICE_HEADER = "Новое обращение от подписчика - требуется обратная связь";
 
 export function registerCallbackHandlers(bot, env) {
   const { CHANNEL_ID, ADMIN_CHAT_ID, CHANNEL_LINK } = env;
@@ -38,25 +36,21 @@ export function registerCallbackHandlers(bot, env) {
       await ctx.answerCbQuery().catch(() => {});
       const p = JSON.parse(ctx.update.callback_query.data || "{}");
 
-      // --- USER SIDE: выбор типа обращения (без ограничения на чат)
+      // --- USER: выбор типа обращения
       if (p.t === "choose") {
         const uid = ctx.from.id;
         const draft = pendingDrafts.get(uid);
         if (!draft) { await ctx.answerCbQuery("Нет черновика"); return; }
 
         const intent = p.v === "advice" ? "advice" : "express";
-
-        await submitDraftToModeration(
-          { telegram: ctx.telegram, ADMIN_CHAT_ID },
-          { user: ctx.from, draft, intent }
-        );
+        await submitDraftToModeration({ telegram: ctx.telegram, ADMIN_CHAT_ID }, { user: ctx.from, draft, intent });
         pendingDrafts.delete(uid);
 
         await ctx.reply("Тема отправлена на модерацию.", memberMenu());
         return;
       }
 
-      // --- ADMIN SIDE: дальше — только из админ-чата
+      // --- ADMIN: всё ниже только из админ-чата
       if (String(ctx.chat?.id) !== String(ADMIN_CHAT_ID)) {
         await ctx.answerCbQuery("Нет доступа"); return;
       }
@@ -73,25 +67,16 @@ export function registerCallbackHandlers(bot, env) {
         return;
       }
 
-      // approve — с кликабельной ссылкой
+      // approve — с кликабельной ссылкой и меню
       if (p.t === "approve") {
         await ctx.telegram.approveChatJoinRequest(p.cid, p.uid);
         await ctx.editMessageReplyMarkup();
         try {
           const { link, title } = await resolveChannelLink(ctx, CHANNEL_ID, CHANNEL_LINK);
-          if (link) {
-            await ctx.telegram.sendMessage(
-              p.uid,
-              `✅ Вам одобрен доступ в канал <a href="${link}">${esc(title)}</a>.`,
-              { parse_mode: "HTML", disable_web_page_preview: true, reply_markup: memberMenu().reply_markup }
-            );
-          } else {
-            await ctx.telegram.sendMessage(
-              p.uid,
-              `✅ Вам одобрен доступ в канал «${title}».`,
-              { reply_markup: memberMenu().reply_markup }
-            );
-          }
+          const text = link
+            ? `✅ Вам одобрен доступ в канал <a href="${link}">${esc(title)}</a>.`
+            : `✅ Вам одобрен доступ в канал «${title}».`;
+          await ctx.telegram.sendMessage(p.uid, text, { parse_mode: "HTML", disable_web_page_preview: true, reply_markup: memberMenu().reply_markup });
         } catch (e) { console.error("approve notify error:", e); }
         return;
       }
@@ -103,21 +88,34 @@ export function registerCallbackHandlers(bot, env) {
         return;
       }
 
-      // publish — добавляем шапку, если нужен совет
+      // publish — один пост с заголовком (если нужен совет)
       if (p.t === "publish") {
         const control = ctx.update.callback_query.message;
         const bind = pendingSubmissions.get(control.message_id);
+
         if (bind) {
-          const { srcChatId, srcMsgId, authorId, intent } = bind;
+          const { srcChatId, srcMsgId, authorId, intent, kind, supportsCaption, text } = bind;
 
           if (intent === "advice") {
-            await ctx.telegram.sendMessage(
-              CHANNEL_ID,
-              "Новое обращение от подписчика - «требуется обратная связь»"
-            );
+            if (kind === "text") {
+              const combined = `${ADVICE_HEADER}\n\n${text || ""}`.trimEnd();
+              await ctx.telegram.sendMessage(CHANNEL_ID, combined);
+            } else if (supportsCaption) {
+              const caption = text ? `${ADVICE_HEADER}\n\n${text}` : ADVICE_HEADER;
+              await ctx.telegram.copyMessage(CHANNEL_ID, srcChatId, srcMsgId, { caption });
+            } else {
+              // тип без подписи (например, видео-кружок/стикер) — отправим только контент
+              await ctx.telegram.copyMessage(CHANNEL_ID, srcChatId, srcMsgId);
+            }
+          } else {
+            // без шапки
+            if (kind === "text") {
+              await ctx.telegram.sendMessage(CHANNEL_ID, text || "");
+            } else {
+              await ctx.telegram.copyMessage(CHANNEL_ID, srcChatId, srcMsgId);
+            }
           }
 
-          await ctx.telegram.copyMessage(CHANNEL_ID, srcChatId, srcMsgId);
           await ctx.editMessageReplyMarkup();
 
           try {
@@ -131,6 +129,7 @@ export function registerCallbackHandlers(bot, env) {
           pendingSubmissions.delete(control.message_id);
           return;
         }
+
         // fallback
         const adminMsg = ctx.update.callback_query.message;
         await ctx.telegram.copyMessage(CHANNEL_ID, ADMIN_CHAT_ID, adminMsg.message_id);

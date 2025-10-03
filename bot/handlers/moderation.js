@@ -3,8 +3,23 @@ import { newUserMenu, memberMenu, choiceKeyboard } from "../ui.js";
 import { isMember } from "../utils.js";
 import { submitDraftToModeration } from "../submit.js";
 import {
-  awaitingTopic, pendingDrafts, pendingRejections, pendingRejectionsByAdmin, pendingSubmissions
+  awaitingTopic, pendingDrafts, pendingRejections, pendingRejectionsByAdmin
 } from "../state.js";
+
+function detectContentMeta(msg) {
+  // Возвращаем { kind, supportsCaption, text }
+  if ("text" in msg) return { kind: "text", supportsCaption: false, text: msg.text || "" };
+  if (msg.photo) return { kind: "photo", supportsCaption: true, text: msg.caption || "" };
+  if (msg.video) return { kind: "video", supportsCaption: true, text: msg.caption || "" };
+  if (msg.animation) return { kind: "animation", supportsCaption: true, text: msg.caption || "" };
+  if (msg.document) return { kind: "document", supportsCaption: true, text: msg.caption || "" };
+  if (msg.audio) return { kind: "audio", supportsCaption: true, text: msg.caption || "" };
+  if (msg.voice) return { kind: "voice", supportsCaption: true, text: msg.caption || "" };
+  if (msg.video_note) return { kind: "video_note", supportsCaption: false, text: "" }; // кружок — без подписи
+  if (msg.sticker) return { kind: "sticker", supportsCaption: false, text: "" };
+  // дефолт: без подписи
+  return { kind: "other", supportsCaption: false, text: "" };
+}
 
 export function registerModerationHandlers(bot, env) {
   const { CHANNEL_ID, ADMIN_CHAT_ID } = env;
@@ -16,7 +31,7 @@ export function registerModerationHandlers(bot, env) {
       return;
     }
     awaitingTopic.add(ctx.from.id);
-    await ctx.reply("Напишите вашу тему одним сообщением."); // без (/cancel)
+    await ctx.reply("Напишите вашу тему одним сообщением."); // обновлённый текст
   });
 
   bot.command("cancel", async (ctx) => {
@@ -31,25 +46,18 @@ export function registerModerationHandlers(bot, env) {
       if (String(ctx.chat?.id) === String(ADMIN_CHAT_ID)) {
         const replyTo = ctx.message?.reply_to_message;
         if (replyTo) {
-          const key = replyTo.message_id;
-          const entry = pendingRejections.get(key);
-          if (entry) {
-            const { handleRejectionReason } = await import("../utils.js");
-            await handleRejectionReason(ctx, entry, { ADMIN_CHAT_ID });
-            return;
-          }
+          const { pendingRejections, handleRejectionReason } = await import("../utils.js");
+          const entry = pendingRejections.get(replyTo.message_id);
+          if (entry) { await handleRejectionReason(ctx, entry, { ADMIN_CHAT_ID }); return; }
         }
+        const { pendingRejectionsByAdmin, handleRejectionReason } = await import("../utils.js");
         const planB = pendingRejectionsByAdmin.get(ctx.from.id);
-        if (planB) {
-          const { handleRejectionReason } = await import("../utils.js");
-          await handleRejectionReason(ctx, planB, { ADMIN_CHAT_ID });
-          return;
-        }
+        if (planB) { await handleRejectionReason(ctx, planB, { ADMIN_CHAT_ID }); return; }
       }
 
       const uid = ctx.from.id;
 
-      // 2) Пользователь прислал тему (любой тип), если ждали текст
+      // 2) Пользователь прислал тему (любой тип), если ждали
       if (awaitingTopic.has(uid)) {
         if (!(await isMember(ctx, CHANNEL_ID))) {
           awaitingTopic.delete(uid);
@@ -59,8 +67,15 @@ export function registerModerationHandlers(bot, env) {
 
         awaitingTopic.delete(uid);
 
-        // сохраняем черновик (любой тип)
-        pendingDrafts.set(uid, { srcChatId: ctx.chat.id, srcMsgId: ctx.message.message_id });
+        // сохраняем черновик + метаданные контента
+        const meta = detectContentMeta(ctx.message);
+        pendingDrafts.set(uid, {
+          srcChatId: ctx.chat.id,
+          srcMsgId: ctx.message.message_id,
+          kind: meta.kind,
+          supportsCaption: meta.supportsCaption,
+          text: meta.text
+        });
 
         // просим выбрать тип обращения (и даём fallback 1/2)
         await ctx.reply(
@@ -70,9 +85,9 @@ export function registerModerationHandlers(bot, env) {
         return;
       }
 
-      // 3) Fallback: пользователь ответил «1»/«2» вместо кнопок
+      // 3) Fallback: «1»/«2» вместо кнопок
       if (pendingDrafts.has(uid) && "text" in ctx.message) {
-        const t = ctx.message.text.trim();
+        const t = (ctx.message.text || "").trim();
         if (t === "1" || t === "2") {
           const draft = pendingDrafts.get(uid);
           const intent = t === "1" ? "advice" : "express";
