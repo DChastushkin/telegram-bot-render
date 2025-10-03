@@ -1,8 +1,9 @@
 // bot/handlers/moderation.js
-import { newUserMenu, memberMenu } from "../ui.js";
-import { isMember, handleRejectionReason } from "../utils.js";
+import { newUserMenu, memberMenu, choiceKeyboard } from "../ui.js";
+import { isMember } from "../utils.js";
+import { submitDraftToModeration } from "../submit.js";
 import {
-  awaitingTopic, pendingRejections, pendingRejectionsByAdmin, pendingSubmissions
+  awaitingTopic, pendingDrafts, pendingRejections, pendingRejectionsByAdmin, pendingSubmissions
 } from "../state.js";
 
 export function registerModerationHandlers(bot, env) {
@@ -15,7 +16,7 @@ export function registerModerationHandlers(bot, env) {
       return;
     }
     awaitingTopic.add(ctx.from.id);
-    await ctx.reply("Напишите вашу тему одним сообщением (или /cancel для отмены).");
+    await ctx.reply("Напишите вашу тему одним сообщением."); // без (/cancel)
   });
 
   bot.command("cancel", async (ctx) => {
@@ -29,57 +30,65 @@ export function registerModerationHandlers(bot, env) {
       // 1) Ответ модератора с причиной (в админ-чате)
       if (String(ctx.chat?.id) === String(ADMIN_CHAT_ID)) {
         const replyTo = ctx.message?.reply_to_message;
-
-        // 1a) Реплай на подсказку/карточку/копию
         if (replyTo) {
           const key = replyTo.message_id;
           const entry = pendingRejections.get(key);
-          if (entry) { await handleRejectionReason(ctx, entry, { ADMIN_CHAT_ID }); return; }
+          if (entry) {
+            const { handleRejectionReason } = await import("../utils.js");
+            await handleRejectionReason(ctx, entry, { ADMIN_CHAT_ID });
+            return;
+          }
         }
-        // 1b) «План Б»: следующее сообщение без реплая
         const planB = pendingRejectionsByAdmin.get(ctx.from.id);
-        if (planB) { await handleRejectionReason(ctx, planB, { ADMIN_CHAT_ID }); return; }
+        if (planB) {
+          const { handleRejectionReason } = await import("../utils.js");
+          await handleRejectionReason(ctx, planB, { ADMIN_CHAT_ID });
+          return;
+        }
       }
 
-      // 2) Пользователь прислал тему (любой тип), если ждали
-      if (awaitingTopic.has(ctx.from.id)) {
+      const uid = ctx.from.id;
+
+      // 2) Пользователь прислал тему (любой тип), если ждали текст
+      if (awaitingTopic.has(uid)) {
         if (!(await isMember(ctx, CHANNEL_ID))) {
-          awaitingTopic.delete(ctx.from.id);
+          awaitingTopic.delete(uid);
           await ctx.reply("❌ Вы больше не участник канала. Сначала запросите доступ.", newUserMenu());
           return;
         }
 
-        awaitingTopic.delete(ctx.from.id);
+        awaitingTopic.delete(uid);
 
-        const srcChatId = ctx.chat.id;
-        const srcMsgId  = ctx.message.message_id;
+        // сохраняем черновик (любой тип)
+        pendingDrafts.set(uid, { srcChatId: ctx.chat.id, srcMsgId: ctx.message.message_id });
 
-        // инфо об авторе
-        const name = [ctx.from.first_name, ctx.from.last_name].filter(Boolean).join(" ") || "—";
-        await ctx.telegram.sendMessage(ADMIN_CHAT_ID,
-          `👤 От: @${ctx.from.username || "—"}\nID: ${ctx.from.id}\nИмя: ${name}`
+        // просим выбрать тип обращения (и даём fallback 1/2)
+        await ctx.reply(
+          "Выберите формат обращения (или отправьте цифру: 1 — нужен совет, 2 — хочу высказаться):",
+          choiceKeyboard()
         );
-
-        // копия исходника в админ-чат
-        const copied = await ctx.telegram.copyMessage(ADMIN_CHAT_ID, srcChatId, srcMsgId);
-
-        // карточка модерации
-        const cbData = (t) => JSON.stringify({ t, uid: ctx.from.id });
-        const control = await ctx.telegram.sendMessage(
-          ADMIN_CHAT_ID,
-          "📝 Новая предложенная тема (см. сообщение выше).",
-          { reply_markup: { inline_keyboard: [[
-            { text: "📣 Опубликовать", callback_data: cbData("publish") },
-            { text: "🚫 Отклонить",   callback_data: cbData("reject")  }
-          ]] } }
-        );
-
-        pendingSubmissions.set(control.message_id, {
-          srcChatId, srcMsgId, authorId: ctx.from.id, adminCopyMsgId: copied.message_id
-        });
-
-        await ctx.reply("Тема отправлена на модерацию.", memberMenu());
         return;
+      }
+
+      // 3) Fallback: пользователь ответил «1»/«2» вместо кнопок
+      if (pendingDrafts.has(uid) && "text" in ctx.message) {
+        const t = ctx.message.text.trim();
+        if (t === "1" || t === "2") {
+          const draft = pendingDrafts.get(uid);
+          const intent = t === "1" ? "advice" : "express";
+
+          await submitDraftToModeration(
+            { telegram: ctx.telegram, ADMIN_CHAT_ID },
+            { user: ctx.from, draft, intent }
+          );
+          pendingDrafts.delete(uid);
+
+          await ctx.reply("Тема отправлена на модерацию.", memberMenu());
+          return;
+        } else {
+          await ctx.reply("Пожалуйста, нажмите кнопку выше или отправьте «1» / «2».");
+          return;
+        }
       }
 
       return next();

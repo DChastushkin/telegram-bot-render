@@ -1,5 +1,6 @@
 // bot/utils.js
 import { pendingRejections, pendingRejectionsByAdmin, pendingSubmissions } from "./state.js";
+import { memberMenu } from "./ui.js";
 
 export const isOldQueryError = (e) =>
   e?.description?.includes("query is too old") ||
@@ -24,10 +25,19 @@ export async function handleRejectionReason(ctx, entry, { ADMIN_CHAT_ID }) {
   const { authorId, modMsgId, modText } = entry;
   const reason = ctx.message.text.trim();
 
-  // автору
+  // автору (+ меню)
   let sent = true;
-  try { await ctx.telegram.sendMessage(authorId, `❌ Ваша тема отклонена.\nПричина: ${reason}`); }
-  catch (e) { sent = false; await ctx.reply("⚠️ Не удалось отправить причину автору."); console.error(e); }
+  try {
+    await ctx.telegram.sendMessage(
+      authorId,
+      `❌ Ваша тема отклонена.\nПричина: ${reason}`,
+      { reply_markup: memberMenu().reply_markup }
+    );
+  } catch (e) {
+    sent = false;
+    await ctx.reply("⚠️ Не удалось отправить причину автору.");
+    console.error(e);
+  }
 
   // помечаем карточку
   try {
