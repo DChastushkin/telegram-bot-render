@@ -24,6 +24,20 @@ const bot = createBot({ BOT_TOKEN, CHANNEL_ID, ADMIN_CHAT_ID, CHANNEL_LINK });
 const listenPort = Number(PORT) || 3000;
 app.listen(listenPort, () => console.log(`HTTP server listening on ${listenPort}`));
 
+// keepalive (только если есть APP_URL)
+if (process.env.APP_URL) {
+  const periodMin = Number(process.env.KEEPALIVE_MIN || 4); // 4–5 мин
+  const url = `${process.env.APP_URL}/?ka=${Date.now()}`;
+  setInterval(async () => {
+    try {
+      await fetch(`${process.env.APP_URL}/?ka=${Date.now()}`);
+      console.log(`[keepalive] ping OK ${new Date().toISOString()}`);
+    } catch (e) {
+      console.log(`[keepalive] ping FAIL: ${e.message}`);
+    }
+  }, periodMin * 60 * 1000);
+}
+
 (async () => {
   try {
     if (APP_URL) {
