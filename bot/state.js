@@ -1,12 +1,15 @@
 // bot/state.js
-export const awaitingTopic = new Set();             // кто пишет тему (ожидаем 1-е сообщение)
+export const awaitingTopic = new Set(); // кто начинает ввод темы
 
-// сохраняем черновик вместе с метаданными контента
-// userId -> { srcChatId, srcMsgId, kind, supportsCaption, text }
+// userId -> { items: [{ srcChatId, srcMsgId, kind, supportsCaption, text }] }
 export const pendingDrafts = new Map();
 
-export const pendingRejections = new Map();         // replyMsgId -> { authorId, modMsgId, modText }
-export const pendingRejectionsByAdmin = new Map();  // adminId   -> { authorId, modMsgId, modText }
+// для отклонений
+export const pendingRejections = new Map();        // replyMsgId -> entry
+export const pendingRejectionsByAdmin = new Map(); // adminId   -> entry
 
-// controlMsgId -> {..., intent, kind, supportsCaption, text}
+// controlMsgId -> { items, authorId, intent, adminCopyMsgIds, ... }
 export const pendingSubmissions = new Map();
+
+// userIds, у кого попросили выбрать тип (1/2 или кнопки)
+export const awaitingIntent = new Set();

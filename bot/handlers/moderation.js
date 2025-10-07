@@ -1,31 +1,28 @@
 // bot/handlers/moderation.js
-import { newUserMenu, memberMenu, choiceKeyboard } from "../ui.js";
+import { newUserMenu, memberMenu, composeKeyboard, choiceKeyboard } from "../ui.js";
 import { isMember, handleRejectionReason } from "../utils.js";
 import { submitDraftToModeration } from "../submit.js";
 import {
-  awaitingTopic,
-  pendingDrafts,
-  pendingRejections,
-  pendingRejectionsByAdmin
+  awaitingTopic, pendingDrafts, pendingRejections, pendingRejectionsByAdmin, awaitingIntent
 } from "../state.js";
 
 function detectContentMeta(msg) {
   if ("text" in msg) return { kind: "text", supportsCaption: false, text: msg.text || "" };
-  if (msg.photo) return { kind: "photo", supportsCaption: true, text: msg.caption || "" };
-  if (msg.video) return { kind: "video", supportsCaption: true, text: msg.caption || "" };
-  if (msg.animation) return { kind: "animation", supportsCaption: true, text: msg.caption || "" };
-  if (msg.document) return { kind: "document", supportsCaption: true, text: msg.caption || "" };
-  if (msg.audio) return { kind: "audio", supportsCaption: true, text: msg.caption || "" };
-  if (msg.voice) return { kind: "voice", supportsCaption: true, text: msg.caption || "" };
-  if (msg.video_note) return { kind: "video_note", supportsCaption: false, text: "" };
-  if (msg.sticker) return { kind: "sticker", supportsCaption: false, text: "" };
-  return { kind: "other", supportsCaption: false, text: "" };
+  if (msg.photo)     return { kind: "photo",     supportsCaption: true,  text: msg.caption || "" };
+  if (msg.video)     return { kind: "video",     supportsCaption: true,  text: msg.caption || "" };
+  if (msg.animation) return { kind: "animation", supportsCaption: true,  text: msg.caption || "" };
+  if (msg.document)  return { kind: "document",  supportsCaption: true,  text: msg.caption || "" };
+  if (msg.audio)     return { kind: "audio",     supportsCaption: true,  text: msg.caption || "" };
+  if (msg.voice)     return { kind: "voice",     supportsCaption: true,  text: msg.caption || "" };
+  if (msg.video_note)return { kind: "video_note",supportsCaption: false, text: "" };
+  if (msg.sticker)   return { kind: "sticker",   supportsCaption: false, text: "" };
+  return { kind: "other",    supportsCaption: false, text: "" };
 }
 
 export function registerModerationHandlers(bot, env) {
   const { CHANNEL_ID, ADMIN_CHAT_ID } = env;
 
-  // «Предложить тему» (только для участников)
+  // Старт ввода
   bot.hears("📝 Предложить тему/вопрос", async (ctx) => {
     if (!(await isMember(ctx, CHANNEL_ID))) {
       await ctx.reply("❌ Вы ещё не участник канала. Сначала запросите доступ.", newUserMenu());
@@ -37,82 +34,68 @@ export function registerModerationHandlers(bot, env) {
 
   bot.command("cancel", async (ctx) => {
     awaitingTopic.delete(ctx.from.id);
+    pendingDrafts.delete(ctx.from.id);
+    awaitingIntent.delete(ctx.from.id);
     await ctx.reply("Отменено.", await isMember(ctx, CHANNEL_ID) ? memberMenu() : newUserMenu());
   });
 
-  // Общий обработчик сообщений
+  // Общий хендлер
   bot.on("message", async (ctx, next) => {
     try {
-      // 1) Ответ модератора с причиной (в админ-чате)
+      // причина отклонения (админ-чат)
       if (String(ctx.chat?.id) === String(ADMIN_CHAT_ID)) {
         const replyTo = ctx.message?.reply_to_message;
-
-        // 1a) Реплай на подсказку/карточку/копию
         if (replyTo) {
-          const key = replyTo.message_id;
-          const entry = pendingRejections.get(key);
-          if (entry) {
-            await handleRejectionReason(ctx, entry, { ADMIN_CHAT_ID });
-            return;
-          }
+          const entry = pendingRejections.get(replyTo.message_id);
+          if (entry) { await handleRejectionReason(ctx, entry, { ADMIN_CHAT_ID }); return; }
         }
-
-        // 1b) «План Б»: следующее сообщение без реплая
         const planB = pendingRejectionsByAdmin.get(ctx.from.id);
-        if (planB) {
-          await handleRejectionReason(ctx, planB, { ADMIN_CHAT_ID });
-          return;
-        }
+        if (planB) { await handleRejectionReason(ctx, planB, { ADMIN_CHAT_ID }); return; }
       }
 
       const uid = ctx.from.id;
 
-      // 2) Пользователь прислал тему (любой тип), если ждали
+      // 1) Начало черновика (первое сообщение темы)
       if (awaitingTopic.has(uid)) {
         if (!(await isMember(ctx, CHANNEL_ID))) {
           awaitingTopic.delete(uid);
           await ctx.reply("❌ Вы больше не участник канала. Сначала запросите доступ.", newUserMenu());
           return;
         }
-
         awaitingTopic.delete(uid);
-
-        // сохраняем черновик + метаданные контента
         const meta = detectContentMeta(ctx.message);
-        pendingDrafts.set(uid, {
-          srcChatId: ctx.chat.id,
-          srcMsgId: ctx.message.message_id,
-          kind: meta.kind,
-          supportsCaption: meta.supportsCaption,
-          text: meta.text
-        });
+        pendingDrafts.set(uid, { items: [{ srcChatId: ctx.chat.id, srcMsgId: ctx.message.message_id, ...meta }] });
 
-        // просим выбрать тип обращения (и даём fallback 1/2)
         await ctx.reply(
-          "Выберите формат обращения (или отправьте цифру: 1 — нужен совет, 2 — хочу высказаться):",
-          choiceKeyboard()
+          "Принято. Можете добавить ещё текст/медиа/стикеры.\nКогда закончите — нажмите «✅ Готово».",
+          composeKeyboard()
         );
         return;
       }
 
-      // 3) Fallback: «1»/«2» вместо кнопок
-      if (pendingDrafts.has(uid) && "text" in ctx.message) {
+      // 2) Продолжение набора: пока есть черновик — складываем любые новые сообщения
+      if (pendingDrafts.has(uid) && !awaitingIntent.has(uid)) {
+        const meta = detectContentMeta(ctx.message);
+        const session = pendingDrafts.get(uid);
+        session.items.push({ srcChatId: ctx.chat.id, srcMsgId: ctx.message.message_id, ...meta });
+        // лёгкое подтверждение
+        await ctx.reply("Добавлено. Нажмите «✅ Готово», когда закончите.", composeKeyboard());
+        return;
+      }
+
+      // 3) Fallback: выбор «1/2» после «Готово»
+      if (pendingDrafts.has(uid) && awaitingIntent.has(uid) && "text" in ctx.message) {
         const t = (ctx.message.text || "").trim();
         if (t === "1" || t === "2") {
-          const draft = pendingDrafts.get(uid);
-          const intent = t === "1" ? "advice" : "express";
-
-          await submitDraftToModeration(
-            { telegram: ctx.telegram, ADMIN_CHAT_ID },
-            { user: ctx.from, draft, intent }
-          );
+          const session = pendingDrafts.get(uid);
+          const intent  = t === "1" ? "advice" : "express";
+          await submitDraftToModeration({ telegram: ctx.telegram, ADMIN_CHAT_ID }, { user: ctx.from, draft: session, intent });
           pendingDrafts.delete(uid);
-
+          awaitingIntent.delete(uid);
           await ctx.reply("Тема отправлена на модерацию.", memberMenu());
           return;
         } else {
-          await ctx.reply("Пожалуйста, нажмите кнопку выше или отправьте «1» / «2».");
-          return;
+          await ctx.reply("Пожалуйста, нажмите кнопку выше или отправьте «1» / «2»."); return;
         }
       }
 
@@ -121,5 +104,24 @@ export function registerModerationHandlers(bot, env) {
       console.error("message handler error:", e);
       return next();
     }
+  });
+
+  // После нажатия «Готово» покажем выбор типа
+  bot.action("compose_done", async (ctx) => {
+    await ctx.answerCbQuery().catch(() => {});
+    if (!pendingDrafts.has(ctx.from.id)) { await ctx.reply("Черновик не найден."); return; }
+    awaitingIntent.add(ctx.from.id);
+    await ctx.reply(
+      "Выберите формат обращения (или отправьте цифру: 1 — нужен совет, 2 — хочу высказаться):",
+      choiceKeyboard()
+    );
+  });
+
+  // Отмена набора
+  bot.action("compose_cancel", async (ctx) => {
+    await ctx.answerCbQuery().catch(() => {});
+    pendingDrafts.delete(ctx.from.id);
+    awaitingIntent.delete(ctx.from.id);
+    await ctx.reply("Отменено.", memberMenu());
   });
 }
