@@ -7,13 +7,13 @@ export const intentLabel = (intent) =>
 const ADVICE_HEADER  = "Новое обращение от подписчика - требуется обратная связь";
 const EXPRESS_HEADER = "Новая тема от подписчика";
 
-// shift entities
+// сместить entities на shift символов
 function shiftEntities(entities = [], shift = 0) {
   if (!Array.isArray(entities) || shift === 0) return entities;
   return entities.map(e => ({ ...e, offset: e.offset + shift }));
 }
 
-// join text segments + entities
+// склеить несколько текстовых сегментов с сохранением entities
 function joinTextWithEntities(segments, sep = "\n\n") {
   const parts = [];
   const outEntities = [];
@@ -40,6 +40,7 @@ function joinTextWithEntities(segments, sep = "\n\n") {
  */
 export async function submitDraftToModeration({ telegram, ADMIN_CHAT_ID }, { user, draft, intent }) {
   const header = intent === "advice" ? ADVICE_HEADER : EXPRESS_HEADER;
+
   const info =
     `👤 От: @${user.username || "—"}\n` +
     `ID: ${user.id}\n` +
@@ -49,15 +50,20 @@ export async function submitDraftToModeration({ telegram, ADMIN_CHAT_ID }, { use
   await telegram.sendMessage(ADMIN_CHAT_ID, info);
 
   const items = draft.items || [];
+
+  // соберём все текстовые сегменты (текст или подписи к медиа)
   const textSegments = items
     .map(it => ({ text: it.text || "", entities: it.entities || [] }))
     .filter(s => s.text && s.text.trim().length > 0);
 
-  let primary = null; // последняя медиа с подписью
+  // последняя медиа с поддержкой подписи — primary
+  let primary = null;
   for (let i = items.length - 1; i >= 0; i--) {
     if (items[i].supportsCaption) { primary = items[i]; break; }
   }
-  const nonCaptionItems = items.filter(it => !it.supportsCaption);
+
+  // медиа без подписи, НО не текст (т.е. стикер/кружок и т.п.)
+  const nonCaptionMedia = items.filter(it => !it.supportsCaption && it.kind !== "text");
   const hasText = textSegments.length > 0;
 
   const adminPreviewMsgIds = [];
@@ -75,17 +81,23 @@ export async function submitDraftToModeration({ telegram, ADMIN_CHAT_ID }, { use
     );
     adminPreviewMsgIds.push(copied.message_id);
 
-  } else if (hasText && nonCaptionItems.length > 0) {
+  } else if (hasText && nonCaptionMedia.length > 0) {
+    // текст + стикер/кружок → два сообщения
     const { text: body, entities } = joinTextWithEntities(textSegments);
     const combined = `${header}\n\n${body}`;
     const finalEntities = shiftEntities(entities, header.length + 2);
     const msg1 = await telegram.sendMessage(ADMIN_CHAT_ID, combined, { entities: finalEntities });
     adminPreviewMsgIds.push(msg1.message_id);
 
-    const msg2 = await telegram.copyMessage(ADMIN_CHAT_ID, nonCaptionItems[0].srcChatId, nonCaptionItems[0].srcMsgId);
+    const msg2 = await telegram.copyMessage(
+      ADMIN_CHAT_ID,
+      nonCaptionMedia[0].srcChatId,
+      nonCaptionMedia[0].srcMsgId
+    );
     adminPreviewMsgIds.push(msg2.message_id);
 
   } else if (hasText) {
+    // только текст → одно сообщение
     const { text: body, entities } = joinTextWithEntities(textSegments);
     const combined = `${header}\n\n${body}`;
     const finalEntities = shiftEntities(entities, header.length + 2);
@@ -93,23 +105,31 @@ export async function submitDraftToModeration({ telegram, ADMIN_CHAT_ID }, { use
     adminPreviewMsgIds.push(sent.message_id);
 
   } else {
+    // только безподписные медиа → два сообщения (шапка + контент)
     const s1 = await telegram.sendMessage(ADMIN_CHAT_ID, header);
     adminPreviewMsgIds.push(s1.message_id);
-    const first = items[0];
+
+    const first = nonCaptionMedia[0] || items[0];
     const s2 = await telegram.copyMessage(ADMIN_CHAT_ID, first.srcChatId, first.srcMsgId);
     adminPreviewMsgIds.push(s2.message_id);
   }
 
+  // карточка модерации
   const cb = (t) => JSON.stringify({ t, uid: user.id });
   const control = await telegram.sendMessage(
     ADMIN_CHAT_ID,
     "📝 Предпросмотр публикации (см. сообщение выше).",
-    { reply_markup: { inline_keyboard: [[
-      { text: "📣 Опубликовать", callback_data: cb("publish") },
-      { text: "🚫 Отклонить",   callback_data: cb("reject")  }
-    ]] } }
+    {
+      reply_markup: {
+        inline_keyboard: [[
+          { text: "📣 Опубликовать", callback_data: cb("publish") },
+          { text: "🚫 Отклонить",   callback_data: cb("reject")  }
+        ]]
+      }
+    }
   );
 
+  // сохраняем заявку
   pendingSubmissions.set(control.message_id, {
     authorId: user.id,
     intent,
