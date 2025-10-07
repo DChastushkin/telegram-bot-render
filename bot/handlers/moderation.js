@@ -1,13 +1,15 @@
 // bot/handlers/moderation.js
 import { newUserMenu, memberMenu, choiceKeyboard } from "../ui.js";
-import { isMember } from "../utils.js";
+import { isMember, handleRejectionReason } from "../utils.js";
 import { submitDraftToModeration } from "../submit.js";
 import {
-  awaitingTopic, pendingDrafts, pendingRejections, pendingRejectionsByAdmin
+  awaitingTopic,
+  pendingDrafts,
+  pendingRejections,
+  pendingRejectionsByAdmin
 } from "../state.js";
 
 function detectContentMeta(msg) {
-  // Возвращаем { kind, supportsCaption, text }
   if ("text" in msg) return { kind: "text", supportsCaption: false, text: msg.text || "" };
   if (msg.photo) return { kind: "photo", supportsCaption: true, text: msg.caption || "" };
   if (msg.video) return { kind: "video", supportsCaption: true, text: msg.caption || "" };
@@ -15,9 +17,8 @@ function detectContentMeta(msg) {
   if (msg.document) return { kind: "document", supportsCaption: true, text: msg.caption || "" };
   if (msg.audio) return { kind: "audio", supportsCaption: true, text: msg.caption || "" };
   if (msg.voice) return { kind: "voice", supportsCaption: true, text: msg.caption || "" };
-  if (msg.video_note) return { kind: "video_note", supportsCaption: false, text: "" }; // кружок — без подписи
+  if (msg.video_note) return { kind: "video_note", supportsCaption: false, text: "" };
   if (msg.sticker) return { kind: "sticker", supportsCaption: false, text: "" };
-  // дефолт: без подписи
   return { kind: "other", supportsCaption: false, text: "" };
 }
 
@@ -31,7 +32,7 @@ export function registerModerationHandlers(bot, env) {
       return;
     }
     awaitingTopic.add(ctx.from.id);
-    await ctx.reply("Напишите вашу тему одним сообщением."); // обновлённый текст
+    await ctx.reply("Напишите вашу тему одним сообщением.");
   });
 
   bot.command("cancel", async (ctx) => {
@@ -45,14 +46,23 @@ export function registerModerationHandlers(bot, env) {
       // 1) Ответ модератора с причиной (в админ-чате)
       if (String(ctx.chat?.id) === String(ADMIN_CHAT_ID)) {
         const replyTo = ctx.message?.reply_to_message;
+
+        // 1a) Реплай на подсказку/карточку/копию
         if (replyTo) {
-          const { pendingRejections, handleRejectionReason } = await import("../utils.js");
-          const entry = pendingRejections.get(replyTo.message_id);
-          if (entry) { await handleRejectionReason(ctx, entry, { ADMIN_CHAT_ID }); return; }
+          const key = replyTo.message_id;
+          const entry = pendingRejections.get(key);
+          if (entry) {
+            await handleRejectionReason(ctx, entry, { ADMIN_CHAT_ID });
+            return;
+          }
         }
-        const { pendingRejectionsByAdmin, handleRejectionReason } = await import("../utils.js");
+
+        // 1b) «План Б»: следующее сообщение без реплая
         const planB = pendingRejectionsByAdmin.get(ctx.from.id);
-        if (planB) { await handleRejectionReason(ctx, planB, { ADMIN_CHAT_ID }); return; }
+        if (planB) {
+          await handleRejectionReason(ctx, planB, { ADMIN_CHAT_ID });
+          return;
+        }
       }
 
       const uid = ctx.from.id;
