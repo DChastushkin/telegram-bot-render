@@ -11,11 +11,35 @@ const esc = (s="") => String(s).replaceAll("&","&amp;").replaceAll("<","&lt;").r
 const ADVICE_HEADER  = "Новое обращение от подписчика - требуется обратная связь";
 const EXPRESS_HEADER = "Новая тема от подписчика";
 
+// смещаем entities на shift символов
 function shiftEntities(entities = [], shift = 0) {
   if (!Array.isArray(entities) || shift === 0) return entities;
   return entities.map(e => ({ ...e, offset: e.offset + shift }));
 }
 
+// склеиваем несколько текстовых сегментов с сохранением entities
+function joinTextWithEntities(segments, sep = "\n\n") {
+  // segments: [{ text, entities }]
+  const parts = [];
+  const outEntities = [];
+  let base = 0;
+  for (let i = 0; i < segments.length; i++) {
+    const t = segments[i].text || "";
+    const ents = Array.isArray(segments[i].entities) ? segments[i].entities : [];
+    if (t.length > 0) {
+      parts.push(t);
+      // переносим entities со сдвигом base
+      for (const e of ents) outEntities.push({ ...e, offset: e.offset + base });
+      base += t.length;
+      if (i !== segments.length - 1) {
+        base += sep.length;
+      }
+    }
+  }
+  return { text: parts.join(sep), entities: outEntities };
+}
+
+// строим ссылку на канал (как раньше)
 async function resolveChannelLink(ctx, CHANNEL_ID, CHANNEL_LINK) {
   let title = "канал";
   try {
@@ -42,7 +66,6 @@ export function registerCallbackHandlers(bot, env) {
       try { p = JSON.parse(ctx.update.callback_query.data || "{}"); } catch {}
 
       // ---------- USER SIDE ----------
-      // Завершение набора черновика
       if (p.t === "compose_done") {
         const uid = ctx.from.id;
         if (!pendingDrafts.has(uid)) { await ctx.answerCbQuery("Черновик не найден"); return; }
@@ -54,7 +77,6 @@ export function registerCallbackHandlers(bot, env) {
         return;
       }
 
-      // Отмена набора
       if (p.t === "compose_cancel") {
         const uid = ctx.from.id;
         pendingDrafts.delete(uid);
@@ -63,7 +85,6 @@ export function registerCallbackHandlers(bot, env) {
         return;
       }
 
-      // Выбор типа обращения
       if (p.t === "choose") {
         const uid = ctx.from.id;
         const session = pendingDrafts.get(uid);
@@ -76,11 +97,10 @@ export function registerCallbackHandlers(bot, env) {
         return;
       }
 
-      // ---------- ADMIN SIDE (только из админ-чата) ----------
+      // ---------- ADMIN SIDE ----------
       if (String(ctx.chat?.id) !== String(ADMIN_CHAT_ID)) { await ctx.answerCbQuery("Нет доступа"); return; }
       const adminId = ctx.from.id;
 
-      // Разблокировка
       if (p.t === "unban") {
         try {
           await ctx.telegram.unbanChatMember(CHANNEL_ID, p.uid);
@@ -90,7 +110,6 @@ export function registerCallbackHandlers(bot, env) {
         return;
       }
 
-      // Одобрение заявки — с кликабельной ссылкой и показом меню
       if (p.t === "approve") {
         await ctx.telegram.approveChatJoinRequest(p.cid, p.uid);
         await ctx.editMessageReplyMarkup();
@@ -99,12 +118,13 @@ export function registerCallbackHandlers(bot, env) {
           const text = link
             ? `✅ Вам одобрен доступ в канал <a href="${link}">${esc(title)}</a>.`
             : `✅ Вам одобрен доступ в канал «${title}».`;
-          await ctx.telegram.sendMessage(p.uid, text, { parse_mode: "HTML", disable_web_page_preview: true, reply_markup: memberMenu().reply_markup });
+          await ctx.telegram.sendMessage(p.uid, text, {
+            parse_mode: "HTML", disable_web_page_preview: true, reply_markup: memberMenu().reply_markup
+          });
         } catch (e) { console.error("approve notify error:", e); }
         return;
       }
 
-      // Отклонение заявки
       if (p.t === "decline") {
         await ctx.telegram.declineChatJoinRequest(p.cid, p.uid);
         await ctx.editMessageReplyMarkup();
@@ -112,7 +132,7 @@ export function registerCallbackHandlers(bot, env) {
         return;
       }
 
-      // Публикация темы (с сохранением форматирования)
+      // ======= САМО ПУБЛИКОВАНИЕ: ОДИН ПОСТ =======
       if (p.t === "publish") {
         const control = ctx.update.callback_query.message;
         const bind = pendingSubmissions.get(control.message_id);
@@ -120,43 +140,66 @@ export function registerCallbackHandlers(bot, env) {
           const { authorId, intent, items } = bind;
           const header = intent === "advice" ? ADVICE_HEADER : EXPRESS_HEADER;
 
-          const first = items[0];
-          if (first.kind === "text") {
-            const combined = first.text ? `${header}\n\n${first.text}` : header;
-            const entities = shiftEntities(first.entities, first.text ? header.length + 2 : 0);
-            await ctx.telegram.sendMessage(CHANNEL_ID, combined, { entities });
-          } else if (first.supportsCaption) {
-            const caption = first.text ? `${header}\n\n${first.text}` : header;
-            const caption_entities = shiftEntities(first.entities, first.text ? header.length + 2 : 0);
-            await ctx.telegram.copyMessage(CHANNEL_ID, first.srcChatId, first.srcMsgId, { caption, caption_entities });
-          } else {
-            // без подписи (стикер/кружок) — шапка отдельным постом, затем контент
-            await ctx.telegram.sendMessage(CHANNEL_ID, header);
-            await ctx.telegram.copyMessage(CHANNEL_ID, first.srcChatId, first.srcMsgId);
-          }
+          // тексты из всех элементов (text или caption) для склейки
+          const textSegments = items
+            .map(it => ({ text: it.text || "", entities: it.entities || [] }))
+            .filter(s => s.text && s.text.trim().length > 0);
 
-          for (let i = 1; i < items.length; i++) {
-            const it = items[i];
-            await ctx.telegram.copyMessage(CHANNEL_ID, it.srcChatId, it.srcMsgId);
+          // выбираем "основной" элемент для одно-сообщной публикации
+          // 1) если есть медиа с подписью — берём последнюю такую
+          let primary = null;
+          for (let i = items.length - 1; i >= 0; i--) {
+            if (items[i].supportsCaption) { primary = items[i]; break; }
+          }
+          // 2) иначе, если есть текст — будет чисто текстовый пост
+          const onlyText = !primary && textSegments.length > 0;
+
+          if (primary) {
+            // соберём единый caption = header + "\n\n" + все тексты
+            const { text: body, entities } = joinTextWithEntities(textSegments);
+            const caption = body ? `${header}\n\n${body}` : header;
+            const caption_entities = shiftEntities(entities, body ? header.length + 2 : 0);
+
+            // публикуем РОВНО ОДНО сообщение — выбранную медиа с новой подписью
+            await ctx.telegram.copyMessage(
+              CHANNEL_ID,
+              primary.srcChatId,
+              primary.srcMsgId,
+              { caption, caption_entities }
+            );
+          } else if (onlyText) {
+            const { text: body, entities } = joinTextWithEntities(textSegments);
+            const combined = body ? `${header}\n\n${body}` : header;
+            const finalEntities = shiftEntities(entities, body ? header.length + 2 : 0);
+            await ctx.telegram.sendMessage(CHANNEL_ID, combined, { entities: finalEntities });
+          } else {
+            // тут остался кейс "только стикер/кружок, без текста" — в TG нельзя объединить.
+            // Отправим 2 сообщения: (1) заголовок, (2) сам контент.
+            await ctx.telegram.sendMessage(CHANNEL_ID, header);
+            await ctx.telegram.copyMessage(CHANNEL_ID, items[0].srcChatId, items[0].srcMsgId);
           }
 
           await ctx.editMessageReplyMarkup();
 
           try {
-            await ctx.telegram.sendMessage(authorId, "✅ Ваша тема опубликована.", { reply_markup: memberMenu().reply_markup });
+            await ctx.telegram.sendMessage(
+              authorId,
+              "✅ Ваша тема опубликована.",
+              { reply_markup: memberMenu().reply_markup }
+            );
           } catch {}
 
           pendingSubmissions.delete(control.message_id);
           return;
         }
 
+        // fallback: очень старая карточка
         const adminMsg = ctx.update.callback_query.message;
         await ctx.telegram.copyMessage(CHANNEL_ID, ADMIN_CHAT_ID, adminMsg.message_id);
         await ctx.editMessageReplyMarkup();
         return;
       }
 
-      // Отклонение темы — запрос причины
       if (p.t === "reject") {
         const control = ctx.update.callback_query.message;
         const prompt = await ctx.telegram.sendMessage(
@@ -168,8 +211,8 @@ export function registerCallbackHandlers(bot, env) {
 
         pendingRejections.set(prompt.message_id, entry);
         pendingRejections.set(control.message_id, entry);
-        const bind = pendingSubmissions.get(control.message_id);
-        if (bind?.adminCopyMsgIds) for (const id of bind.adminCopyMsgIds) pendingRejections.set(id, entry);
+        const bind2 = pendingSubmissions.get(control.message_id);
+        if (bind2?.adminCopyMsgIds) for (const id of bind2.adminCopyMsgIds) pendingRejections.set(id, entry);
 
         pendingRejectionsByAdmin.set(adminId, entry);
         return;
