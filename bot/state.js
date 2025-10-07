@@ -1,15 +1,13 @@
 // bot/state.js
-export const awaitingTopic = new Set(); // кто начинает ввод темы
+export const awaitingTopic = new Set();
 
-// userId -> { items: [{ srcChatId, srcMsgId, kind, supportsCaption, text }] }
+// userId -> { items: [{ srcChatId, srcMsgId, kind, supportsCaption, text, entities }] }
 export const pendingDrafts = new Map();
 
-// для отклонений
 export const pendingRejections = new Map();        // replyMsgId -> entry
-export const pendingRejectionsByAdmin = new Map(); // adminId   -> entry
+export const pendingRejectionsByAdmin = new Map(); // adminId    -> entry
 
-// controlMsgId -> { items, authorId, intent, adminCopyMsgIds, ... }
+// controlMsgId -> { authorId, intent, adminCopyMsgIds?, items: [{...}] }
 export const pendingSubmissions = new Map();
 
-// userIds, у кого попросили выбрать тип (1/2 или кнопки)
 export const awaitingIntent = new Set();
