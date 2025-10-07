@@ -1,6 +1,6 @@
 // bot/handlers/callbacks.js
 import { isOldQueryError } from "../utils.js";
-import { memberMenu } from "../ui.js";
+import { memberMenu, choiceKeyboard } from "../ui.js";
 import { submitDraftToModeration } from "../submit.js";
 import {
   pendingDrafts, awaitingIntent,
@@ -38,11 +38,32 @@ export function registerCallbackHandlers(bot, env) {
   bot.on("callback_query", async (ctx) => {
     try {
       await ctx.answerCbQuery().catch(() => {});
-      const p = JSON.parse(ctx.update.callback_query.data || "{}");
+      let p = {};
+      try { p = JSON.parse(ctx.update.callback_query.data || "{}"); } catch {}
 
-      // USER: завершение/отмена набора и выбор типа — как в прошлой версии
-      if (p.t === "compose_done" || p.t === "compose_cancel") return;
+      // ---------- USER SIDE ----------
+      // Завершение набора черновика
+      if (p.t === "compose_done") {
+        const uid = ctx.from.id;
+        if (!pendingDrafts.has(uid)) { await ctx.answerCbQuery("Черновик не найден"); return; }
+        awaitingIntent.add(uid);
+        await ctx.reply(
+          "Выберите формат обращения (или отправьте цифру: 1 — нужен совет, 2 — хочу высказаться):",
+          choiceKeyboard()
+        );
+        return;
+      }
 
+      // Отмена набора
+      if (p.t === "compose_cancel") {
+        const uid = ctx.from.id;
+        pendingDrafts.delete(uid);
+        awaitingIntent.delete(uid);
+        await ctx.reply("Отменено.", memberMenu());
+        return;
+      }
+
+      // Выбор типа обращения
       if (p.t === "choose") {
         const uid = ctx.from.id;
         const session = pendingDrafts.get(uid);
@@ -55,10 +76,11 @@ export function registerCallbackHandlers(bot, env) {
         return;
       }
 
-      // ADMIN-часть
+      // ---------- ADMIN SIDE (только из админ-чата) ----------
       if (String(ctx.chat?.id) !== String(ADMIN_CHAT_ID)) { await ctx.answerCbQuery("Нет доступа"); return; }
       const adminId = ctx.from.id;
 
+      // Разблокировка
       if (p.t === "unban") {
         try {
           await ctx.telegram.unbanChatMember(CHANNEL_ID, p.uid);
@@ -68,6 +90,7 @@ export function registerCallbackHandlers(bot, env) {
         return;
       }
 
+      // Одобрение заявки — с кликабельной ссылкой и показом меню
       if (p.t === "approve") {
         await ctx.telegram.approveChatJoinRequest(p.cid, p.uid);
         await ctx.editMessageReplyMarkup();
@@ -81,6 +104,7 @@ export function registerCallbackHandlers(bot, env) {
         return;
       }
 
+      // Отклонение заявки
       if (p.t === "decline") {
         await ctx.telegram.declineChatJoinRequest(p.cid, p.uid);
         await ctx.editMessageReplyMarkup();
@@ -88,6 +112,7 @@ export function registerCallbackHandlers(bot, env) {
         return;
       }
 
+      // Публикация темы (с сохранением форматирования)
       if (p.t === "publish") {
         const control = ctx.update.callback_query.message;
         const bind = pendingSubmissions.get(control.message_id);
@@ -105,7 +130,7 @@ export function registerCallbackHandlers(bot, env) {
             const caption_entities = shiftEntities(first.entities, first.text ? header.length + 2 : 0);
             await ctx.telegram.copyMessage(CHANNEL_ID, first.srcChatId, first.srcMsgId, { caption, caption_entities });
           } else {
-            // без подписи (стикер/кружок): шапка отдельным постом, затем контент
+            // без подписи (стикер/кружок) — шапка отдельным постом, затем контент
             await ctx.telegram.sendMessage(CHANNEL_ID, header);
             await ctx.telegram.copyMessage(CHANNEL_ID, first.srcChatId, first.srcMsgId);
           }
@@ -116,6 +141,7 @@ export function registerCallbackHandlers(bot, env) {
           }
 
           await ctx.editMessageReplyMarkup();
+
           try {
             await ctx.telegram.sendMessage(authorId, "✅ Ваша тема опубликована.", { reply_markup: memberMenu().reply_markup });
           } catch {}
@@ -130,6 +156,7 @@ export function registerCallbackHandlers(bot, env) {
         return;
       }
 
+      // Отклонение темы — запрос причины
       if (p.t === "reject") {
         const control = ctx.update.callback_query.message;
         const prompt = await ctx.telegram.sendMessage(
