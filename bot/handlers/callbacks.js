@@ -11,13 +11,10 @@ const esc = (s="") => String(s).replaceAll("&","&amp;").replaceAll("<","&lt;").r
 const ADVICE_HEADER  = "Новое обращение от подписчика - требуется обратная связь";
 const EXPRESS_HEADER = "Новая тема от подписчика";
 
-// смещаем entities на shift
 function shiftEntities(entities = [], shift = 0) {
   if (!Array.isArray(entities) || shift === 0) return entities;
   return entities.map(e => ({ ...e, offset: e.offset + shift }));
 }
-
-// склейка текста + entities
 function joinTextWithEntities(segments, sep = "\n\n") {
   const parts = [];
   const outEntities = [];
@@ -66,10 +63,7 @@ export function registerCallbackHandlers(bot, env) {
         const uid = ctx.from.id;
         if (!pendingDrafts.has(uid)) { await ctx.answerCbQuery("Черновик не найден"); return; }
         awaitingIntent.add(uid);
-        await ctx.reply(
-          "Выберите формат обращения (или отправьте цифру: 1 — нужен совет, 2 — хочу высказаться):",
-          choiceKeyboard()
-        );
+        await ctx.reply("Выберите формат обращения (или отправьте цифру: 1 — нужен совет, 2 — хочу высказаться):", choiceKeyboard());
         return;
       }
       if (p.t === "compose_cancel") {
@@ -126,7 +120,7 @@ export function registerCallbackHandlers(bot, env) {
         return;
       }
 
-      // ===== ПУБЛИКАЦИЯ =====
+      // ===== ПУБЛИКАЦИЯ ===== (строго так же, как превью)
       if (p.t === "publish") {
         const control = ctx.update.callback_query.message;
         const bind = pendingSubmissions.get(control.message_id);
@@ -151,7 +145,6 @@ export function registerCallbackHandlers(bot, env) {
             const caption_entities = shiftEntities(entities, body ? header.length + 2 : 0);
             await ctx.telegram.copyMessage(CHANNEL_ID, primary.srcChatId, primary.srcMsgId, { caption, caption_entities });
           } else if (hasText && nonCaptionItems.length > 0) {
-            // Текст + стикер/кружок → два сообщения
             const { text: body, entities } = joinTextWithEntities(textSegments);
             const combined = `${header}\n\n${body}`;
             const finalEntities = shiftEntities(entities, header.length + 2);
@@ -180,13 +173,14 @@ export function registerCallbackHandlers(bot, env) {
           return;
         }
 
+        // очень старая карточка — публикуем её саму
         const adminMsg = ctx.update.callback_query.message;
         await ctx.telegram.copyMessage(CHANNEL_ID, ADMIN_CHAT_ID, adminMsg.message_id);
         await ctx.editMessageReplyMarkup();
         return;
       }
 
-      // ОТКЛОНЕНИЕ — привязка к превью
+      // ОТКЛОНЕНИЕ — привязываем к превью
       if (p.t === "reject") {
         const control = ctx.update.callback_query.message;
         const prompt = await ctx.telegram.sendMessage(
@@ -195,9 +189,9 @@ export function registerCallbackHandlers(bot, env) {
           { reply_to_message_id: control.message_id }
         );
         const entry = { authorId: p.uid, modMsgId: control.message_id, modText: control.text || "" };
-
         pendingRejections.set(prompt.message_id, entry);
         pendingRejections.set(control.message_id, entry);
+
         const bind = pendingSubmissions.get(control.message_id);
         if (bind?.adminPreviewMsgIds) for (const mid of bind.adminPreviewMsgIds) pendingRejections.set(mid, entry);
 

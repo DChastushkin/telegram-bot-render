@@ -31,6 +31,7 @@ function detectContentMeta(msg) {
 export function registerModerationHandlers(bot, env) {
   const { CHANNEL_ID, ADMIN_CHAT_ID } = env;
 
+  // старт ввода
   bot.hears("📝 Предложить тему/вопрос", async (ctx) => {
     if (!(await isMember(ctx, CHANNEL_ID))) {
       await ctx.reply("❌ Вы ещё не участник канала. Сначала запросите доступ.", newUserMenu());
@@ -47,9 +48,10 @@ export function registerModerationHandlers(bot, env) {
     await ctx.reply("Отменено.", await isMember(ctx, CHANNEL_ID) ? memberMenu() : newUserMenu());
   });
 
+  // общий обработчик
   bot.on("message", async (ctx, next) => {
     try {
-      // причина (админ-чат)
+      // причина отклонения (админ-чат)
       if (String(ctx.chat?.id) === String(ADMIN_CHAT_ID)) {
         const replyTo = ctx.message?.reply_to_message;
         if (replyTo) {
@@ -70,10 +72,10 @@ export function registerModerationHandlers(bot, env) {
           return;
         }
         awaitingTopic.delete(uid);
+
         const meta = detectContentMeta(ctx.message);
-        pendingDrafts.set(uid, {
-          items: [{ srcChatId: ctx.chat.id, srcMsgId: ctx.message.message_id, ...meta }]
-        });
+        pendingDrafts.set(uid, { items: [{ srcChatId: ctx.chat.id, srcMsgId: ctx.message.message_id, ...meta }] });
+
         await ctx.reply(
           "Принято. Можете добавить ещё текст/медиа/стикеры.\nКогда закончите — нажмите «✅ Готово».",
           composeKeyboard()
@@ -81,7 +83,7 @@ export function registerModerationHandlers(bot, env) {
         return;
       }
 
-      // дополняем черновик
+      // добавление к черновику
       if (pendingDrafts.has(uid) && !awaitingIntent.has(uid)) {
         const meta = detectContentMeta(ctx.message);
         const session = pendingDrafts.get(uid);
@@ -112,6 +114,4 @@ export function registerModerationHandlers(bot, env) {
       return next();
     }
   });
-
-  // обработка «Готово/Отмена» — остаётся как было в предыдущей версии
 }
