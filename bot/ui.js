@@ -7,8 +7,8 @@ export const memberMenu  = () => Markup.keyboard([["📝 Предложить т
 
 export const choiceKeyboard = () =>
   Markup.inlineKeyboard([
-    [{ text: "🧭 Нужен совет", callback_data: JSON.stringify({ t: "choose", v: "advice" }) }],
-    [{ text: "💬 Хочу высказаться", callback_data: JSON.stringify({ t: "choose", v: "express" }) }]
+    [{ text: "🧭 Нужен совет",       callback_data: JSON.stringify({ t: "choose", v: "advice"  }) }],
+    [{ text: "💬 Хочу высказаться",  callback_data: JSON.stringify({ t: "choose", v: "express" }) }]
   ]);
 
 export const composeKeyboard = () =>
@@ -19,6 +19,12 @@ export const composeKeyboard = () =>
 
 export async function showMenuByStatus(ctx, channelId) {
   const member = await isMember(ctx, channelId);
-  if (member) await ctx.reply("Вы участник канала. Можете предложить тему.", memberMenu());
-  else await ctx.reply("Чтобы предлагать темы, запросите доступ в канал.", newUserMenu());
+  if (member) {
+    await ctx.reply("Вы участник канала. Можете предложить тему.", memberMenu());
+  } else {
+    await ctx.reply(
+      "Чтобы предлагать темы, запросите доступ в канал. В нем будут публикации и их обсуждение.",
+      newUserMenu()
+    );
+  }
 }
