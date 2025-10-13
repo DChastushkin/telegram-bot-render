@@ -1,9 +1,19 @@
 // bot/handlers/moderation.js
-import { newUserMenu, memberMenu, composeKeyboard, choiceKeyboard } from "../ui.js";
+import {
+  newUserMenu,
+  memberMenu,
+  composeKeyboard,
+  choiceKeyboard,
+  showNonMemberHint
+} from "../ui.js";
 import { isMember, handleRejectionReason } from "../utils.js";
 import { submitDraftToModeration } from "../submit.js";
 import {
-  awaitingTopic, pendingDrafts, pendingRejections, pendingRejectionsByAdmin, awaitingIntent
+  awaitingTopic,
+  pendingDrafts,
+  pendingRejections,
+  pendingRejectionsByAdmin,
+  awaitingIntent
 } from "../state.js";
 
 function detectContentMeta(msg) {
@@ -31,27 +41,31 @@ function detectContentMeta(msg) {
 export function registerModerationHandlers(bot, env) {
   const { CHANNEL_ID, ADMIN_CHAT_ID } = env;
 
-  // старт ввода
+  // Старт ввода темы
   bot.hears("📝 Предложить тему/вопрос", async (ctx) => {
     if (!(await isMember(ctx, CHANNEL_ID))) {
-      await ctx.reply("❌ Вы ещё не участник канала. Сначала запросите доступ.", newUserMenu());
+      await showNonMemberHint(ctx);
       return;
     }
     awaitingTopic.add(ctx.from.id);
     await ctx.reply("Напишите вашу тему одним сообщением.");
   });
 
+  // Отмена любого сценария
   bot.command("cancel", async (ctx) => {
     awaitingTopic.delete(ctx.from.id);
     pendingDrafts.delete(ctx.from.id);
     awaitingIntent.delete(ctx.from.id);
-    await ctx.reply("Отменено.", await isMember(ctx, CHANNEL_ID) ? memberMenu() : newUserMenu());
+    await ctx.reply(
+      "Отменено.",
+      (await isMember(ctx, CHANNEL_ID)) ? memberMenu() : newUserMenu()
+    );
   });
 
-  // общий обработчик
+  // Общий обработчик входящих сообщений
   bot.on("message", async (ctx, next) => {
     try {
-      // причина отклонения (админ-чат)
+      // 0) Обработка причины отклонения в админ-чате
       if (String(ctx.chat?.id) === String(ADMIN_CHAT_ID)) {
         const replyTo = ctx.message?.reply_to_message;
         if (replyTo) {
@@ -64,17 +78,19 @@ export function registerModerationHandlers(bot, env) {
 
       const uid = ctx.from.id;
 
-      // начало черновика
+      // 1) Первое сообщение темы (вход в режим черновика)
       if (awaitingTopic.has(uid)) {
         if (!(await isMember(ctx, CHANNEL_ID))) {
           awaitingTopic.delete(uid);
-          await ctx.reply("❌ Вы больше не участник канала. Сначала запросите доступ.", newUserMenu());
+          await showNonMemberHint(ctx);
           return;
         }
         awaitingTopic.delete(uid);
 
         const meta = detectContentMeta(ctx.message);
-        pendingDrafts.set(uid, { items: [{ srcChatId: ctx.chat.id, srcMsgId: ctx.message.message_id, ...meta }] });
+        pendingDrafts.set(uid, {
+          items: [{ srcChatId: ctx.chat.id, srcMsgId: ctx.message.message_id, ...meta }]
+        });
 
         await ctx.reply(
           "Принято. Можете добавить ещё текст/медиа/стикеры.\nКогда закончите — нажмите «✅ Готово».",
@@ -83,7 +99,7 @@ export function registerModerationHandlers(bot, env) {
         return;
       }
 
-      // добавление к черновику
+      // 2) Продолжение черновика — накапливаем сообщения
       if (pendingDrafts.has(uid) && !awaitingIntent.has(uid)) {
         const meta = detectContentMeta(ctx.message);
         const session = pendingDrafts.get(uid);
@@ -92,19 +108,23 @@ export function registerModerationHandlers(bot, env) {
         return;
       }
 
-      // fallback 1/2 после «Готово»
+      // 3) Fallback «1/2» после «Готово»
       if (pendingDrafts.has(uid) && awaitingIntent.has(uid) && "text" in ctx.message) {
         const t = (ctx.message.text || "").trim();
         if (t === "1" || t === "2") {
           const session = pendingDrafts.get(uid);
           const intent = t === "1" ? "advice" : "express";
-          await submitDraftToModeration({ telegram: ctx.telegram, ADMIN_CHAT_ID }, { user: ctx.from, draft: session, intent });
+          await submitDraftToModeration(
+            { telegram: ctx.telegram, ADMIN_CHAT_ID },
+            { user: ctx.from, draft: session, intent }
+          );
           pendingDrafts.delete(uid);
           awaitingIntent.delete(uid);
           await ctx.reply("Тема отправлена на модерацию.", memberMenu());
           return;
         } else {
-          await ctx.reply("Пожалуйста, нажмите кнопку выше или отправьте «1» / «2»."); return;
+          await ctx.reply("Пожалуйста, нажмите кнопку выше или отправьте «1» / «2»."); 
+          return;
         }
       }
 
