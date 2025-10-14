@@ -17,25 +17,34 @@ if (!BOT_TOKEN) {
 // ===== Bot init =====
 const bot = new Telegraf(BOT_TOKEN);
 
-// подключаем ваши хендлеры
+// наши хендлеры
 import { registerModerationHandlers } from "./bot/handlers/moderation.js";
 import { registerCallbackHandlers }   from "./bot/handlers/callbacks.js";
-// (добавьте другие импорты при необходимости)
+import { showMenuByStatus }           from "./bot/ui.js";
 
 const ENV = { CHANNEL_ID, ADMIN_CHAT_ID, CHANNEL_LINK };
 registerModerationHandlers(bot, ENV);
 registerCallbackHandlers(bot, ENV);
 
+// /start — показать корректное меню
+bot.start(async (ctx) => {
+  try {
+    await showMenuByStatus(ctx, CHANNEL_ID);
+  } catch (e) {
+    console.error("start handler error:", e);
+  }
+});
+
 // ===== Web server (для webhook и health) =====
 const app  = express();
 const PORT = process.env.PORT || 10000;
-
 app.use(bodyParser.json());
 
-// healthcheck — удобно для внешних пингов и проверки
+// health и корневой роут (убирает 'Cannot GET /')
 app.get("/health", (_req, res) => res.status(200).send("ok"));
+app.get("/",        (_req, res) => res.status(200).send("ok"));
 
-// базовый URL: берём WEBHOOK_URL (если задали) или Render'овский RENDER_EXTERNAL_URL
+// базовый URL (Render сам даёт RENDER_EXTERNAL_URL)
 const BASE_URL = process.env.WEBHOOK_URL || process.env.RENDER_EXTERNAL_URL || "";
 const HOOK_PATH = `/webhook/${BOT_TOKEN}`;
 const HOOK_URL  = BASE_URL ? `${BASE_URL}${HOOK_PATH}` : null;
@@ -43,11 +52,10 @@ const HOOK_URL  = BASE_URL ? `${BASE_URL}${HOOK_PATH}` : null;
 // ===== Start =====
 async function start() {
   if (HOOK_URL) {
-    // ---------- WEBHOOK режим ----------
-    // регистрируем webhook-URL
+    // ---------- WEBHOOK ----------
     await bot.telegram.setWebhook(HOOK_URL);
 
-    // мгновенно отдаём 200, апдейт обрабатываем асинхронно (важно для холодного старта)
+    // моментально 200, апдейт — асинхронно (важно для cold start)
     app.post(HOOK_PATH, (req, res) => {
       res.sendStatus(200);
       bot.handleUpdate(req.body).catch(err => console.error("handleUpdate error:", err));
@@ -58,8 +66,7 @@ async function start() {
       console.log(`Webhook set to: ${HOOK_URL}`);
     });
   } else {
-    // ---------- POLLING режим (локально/без внешнего URL) ----------
-    // на всякий случай снимаем вебхук, чтобы не словить 409
+    // ---------- POLLING ----------
     await bot.telegram.deleteWebhook({ drop_pending_updates: false });
     await bot.launch();
     console.log("Long polling started (no BASE_URL set)");
