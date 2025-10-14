@@ -1,9 +1,9 @@
-// index.js — Webhook-first, Polling-fallback
+// index.js — Webhook-first, Polling-fallback (Render-friendly)
 import express from "express";
 import bodyParser from "body-parser";
 import { Telegraf } from "telegraf";
 
-// === ENV ===
+// ===== ENV =====
 const BOT_TOKEN     = process.env.BOT_TOKEN;
 const CHANNEL_ID    = process.env.CHANNEL_ID;
 const ADMIN_CHAT_ID = process.env.ADMIN_CHAT_ID;
@@ -14,38 +14,40 @@ if (!BOT_TOKEN) {
   process.exit(1);
 }
 
+// ===== Bot init =====
 const bot = new Telegraf(BOT_TOKEN);
 
-// === подключение твоих модулей/хендлеров ===
-// пример (оставь как у тебя):
+// подключаем ваши хендлеры
 import { registerModerationHandlers } from "./bot/handlers/moderation.js";
 import { registerCallbackHandlers }   from "./bot/handlers/callbacks.js";
-// если есть другие: import ...
+// (добавьте другие импорты при необходимости)
 
 const ENV = { CHANNEL_ID, ADMIN_CHAT_ID, CHANNEL_LINK };
 registerModerationHandlers(bot, ENV);
 registerCallbackHandlers(bot, ENV);
 
-// === WEBHOOK SERVER (Render-friendly) ===
+// ===== Web server (для webhook и health) =====
 const app  = express();
 const PORT = process.env.PORT || 10000;
+
 app.use(bodyParser.json());
 
-// healthcheck, чтобы было, чем будить/проверять сервис
+// healthcheck — удобно для внешних пингов и проверки
 app.get("/health", (_req, res) => res.status(200).send("ok"));
 
-// вычисляем базовый URL: WEBHOOK_URL (если явно дали) или RENDER_EXTERNAL_URL (Render сам задаёт)
+// базовый URL: берём WEBHOOK_URL (если задали) или Render'овский RENDER_EXTERNAL_URL
 const BASE_URL = process.env.WEBHOOK_URL || process.env.RENDER_EXTERNAL_URL || "";
 const HOOK_PATH = `/webhook/${BOT_TOKEN}`;
 const HOOK_URL  = BASE_URL ? `${BASE_URL}${HOOK_PATH}` : null;
 
-// главный запуск
+// ===== Start =====
 async function start() {
   if (HOOK_URL) {
-    // режим WEBHOOK
+    // ---------- WEBHOOK режим ----------
+    // регистрируем webhook-URL
     await bot.telegram.setWebhook(HOOK_URL);
 
-    // КРИТИЧЕСКОЕ: мгновенно отдаём 200, обработку делаем асинхронно
+    // мгновенно отдаём 200, апдейт обрабатываем асинхронно (важно для холодного старта)
     app.post(HOOK_PATH, (req, res) => {
       res.sendStatus(200);
       bot.handleUpdate(req.body).catch(err => console.error("handleUpdate error:", err));
@@ -56,7 +58,9 @@ async function start() {
       console.log(`Webhook set to: ${HOOK_URL}`);
     });
   } else {
-    // fallback: POLLING (локально, в тестовом окружении без внешнего URL и т.п.)
+    // ---------- POLLING режим (локально/без внешнего URL) ----------
+    // на всякий случай снимаем вебхук, чтобы не словить 409
+    await bot.telegram.deleteWebhook({ drop_pending_updates: false });
     await bot.launch();
     console.log("Long polling started (no BASE_URL set)");
   }
