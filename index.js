@@ -1,60 +1,72 @@
-// index.js — сервер для Render + запуск бота (ESM)
+// index.js — Webhook-first, Polling-fallback
 import express from "express";
-import { createBot } from "./bot/index.js";
+import bodyParser from "body-parser";
+import { Telegraf } from "telegraf";
 
-const {
-  BOT_TOKEN,
-  CHANNEL_ID,
-  ADMIN_CHAT_ID,
-  CHANNEL_LINK, // <— опционально: например "https://t.me/your_channel"
-  APP_URL,
-  PORT
-} = process.env;
+// === ENV ===
+const BOT_TOKEN     = process.env.BOT_TOKEN;
+const CHANNEL_ID    = process.env.CHANNEL_ID;
+const ADMIN_CHAT_ID = process.env.ADMIN_CHAT_ID;
+const CHANNEL_LINK  = process.env.CHANNEL_LINK || null;
 
-if (!BOT_TOKEN || !CHANNEL_ID || !ADMIN_CHAT_ID) {
-  console.error("❌ ENV нужны: BOT_TOKEN, CHANNEL_ID, ADMIN_CHAT_ID");
+if (!BOT_TOKEN) {
+  console.error("Missing BOT_TOKEN");
   process.exit(1);
 }
 
-const app = express();
-app.get("/", (_, res) => res.send("OK — bot is alive"));
+const bot = new Telegraf(BOT_TOKEN);
 
-const bot = createBot({ BOT_TOKEN, CHANNEL_ID, ADMIN_CHAT_ID, CHANNEL_LINK });
+// === подключение твоих модулей/хендлеров ===
+// пример (оставь как у тебя):
+import { registerModerationHandlers } from "./bot/handlers/moderation.js";
+import { registerCallbackHandlers }   from "./bot/handlers/callbacks.js";
+// если есть другие: import ...
 
-const listenPort = Number(PORT) || 3000;
-app.listen(listenPort, () => console.log(`HTTP server listening on ${listenPort}`));
+const ENV = { CHANNEL_ID, ADMIN_CHAT_ID, CHANNEL_LINK };
+registerModerationHandlers(bot, ENV);
+registerCallbackHandlers(bot, ENV);
 
-// keepalive (только если есть APP_URL)
-if (process.env.APP_URL) {
-  const periodMin = Number(process.env.KEEPALIVE_MIN || 4); // 4–5 мин
-  const url = `${process.env.APP_URL}/?ka=${Date.now()}`;
-  setInterval(async () => {
-    try {
-      await fetch(`${process.env.APP_URL}/?ka=${Date.now()}`);
-      console.log(`[keepalive] ping OK ${new Date().toISOString()}`);
-    } catch (e) {
-      console.log(`[keepalive] ping FAIL: ${e.message}`);
-    }
-  }, periodMin * 60 * 1000);
+// === WEBHOOK SERVER (Render-friendly) ===
+const app  = express();
+const PORT = process.env.PORT || 10000;
+app.use(bodyParser.json());
+
+// healthcheck, чтобы было, чем будить/проверять сервис
+app.get("/health", (_req, res) => res.status(200).send("ok"));
+
+// вычисляем базовый URL: WEBHOOK_URL (если явно дали) или RENDER_EXTERNAL_URL (Render сам задаёт)
+const BASE_URL = process.env.WEBHOOK_URL || process.env.RENDER_EXTERNAL_URL || "";
+const HOOK_PATH = `/webhook/${BOT_TOKEN}`;
+const HOOK_URL  = BASE_URL ? `${BASE_URL}${HOOK_PATH}` : null;
+
+// главный запуск
+async function start() {
+  if (HOOK_URL) {
+    // режим WEBHOOK
+    await bot.telegram.setWebhook(HOOK_URL);
+
+    // КРИТИЧЕСКОЕ: мгновенно отдаём 200, обработку делаем асинхронно
+    app.post(HOOK_PATH, (req, res) => {
+      res.sendStatus(200);
+      bot.handleUpdate(req.body).catch(err => console.error("handleUpdate error:", err));
+    });
+
+    app.listen(PORT, () => {
+      console.log(`Webhook server listening on :${PORT}`);
+      console.log(`Webhook set to: ${HOOK_URL}`);
+    });
+  } else {
+    // fallback: POLLING (локально, в тестовом окружении без внешнего URL и т.п.)
+    await bot.launch();
+    console.log("Long polling started (no BASE_URL set)");
+  }
 }
 
-(async () => {
-  try {
-    if (APP_URL) {
-      const path = `/webhook/${BOT_TOKEN.slice(0, 10)}`;
-      app.use(express.json());
-      app.use(path, bot.webhookCallback(path));
-      await bot.telegram.setWebhook(`${APP_URL}${path}`, { drop_pending_updates: true });
-      console.log("Webhook set to:", `${APP_URL}${path}`);
-    } else {
-      await bot.telegram.deleteWebhook({ drop_pending_updates: true });
-      await bot.launch({ dropPendingUpdates: true });
-      console.log("Bot launched in polling mode");
-    }
-  } catch (e) {
-    console.error("Bot start error:", e);
-  }
-})();
+start().catch((e) => {
+  console.error("Bot start error:", e);
+  process.exit(1);
+});
 
-process.once("SIGINT", () => bot.stop("SIGINT"));
+// корректное завершение
+process.once("SIGINT",  () => bot.stop("SIGINT"));
 process.once("SIGTERM", () => bot.stop("SIGTERM"));
