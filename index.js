@@ -1,83 +1,67 @@
-// index.js — Webhook-first, Polling-fallback (Render-friendly)
-import express from "express";
-import bodyParser from "body-parser";
-import { Telegraf } from "telegraf";
+// index.js (root)
 
-// ===== ENV =====
-const BOT_TOKEN     = process.env.BOT_TOKEN;
-const CHANNEL_ID    = process.env.CHANNEL_ID;
-const ADMIN_CHAT_ID = process.env.ADMIN_CHAT_ID;
-const CHANNEL_LINK  = process.env.CHANNEL_LINK || null;
+require("dotenv").config();
 
-if (!BOT_TOKEN) {
-  console.error("Missing BOT_TOKEN");
-  process.exit(1);
-}
+const express = require("express");
+const morgan = require("morgan");
 
-// ===== Bot init =====
-const bot = new Telegraf(BOT_TOKEN);
+// Твой бот (экземпляр Telegraf)
+const bot = require("./bot");
 
-// наши хендлеры
-import { registerModerationHandlers } from "./bot/handlers/moderation.js";
-import { registerCallbackHandlers }   from "./bot/handlers/callbacks.js";
-import { showMenuByStatus }           from "./bot/ui.js";
-
-const ENV = { CHANNEL_ID, ADMIN_CHAT_ID, CHANNEL_LINK };
-registerModerationHandlers(bot, ENV);
-registerCallbackHandlers(bot, ENV);
-
-// /start — показать корректное меню
-bot.start(async (ctx) => {
-  try {
-    await showMenuByStatus(ctx, CHANNEL_ID);
-  } catch (e) {
-    console.error("start handler error:", e);
-  }
-});
-
-// ===== Web server (для webhook и health) =====
-const app  = express();
+// ====== ENV ======
 const PORT = process.env.PORT || 10000;
-app.use(bodyParser.json());
 
-// health и корневой роут (убирает 'Cannot GET /')
+// BASE_URL должен быть именно таким:
+// https://without-mask.onrender.com
+const BASE_URL = (process.env.BASE_URL || "").replace(/\/+$/, "");
+
+const WEBHOOK_PATH = "/webhook";              // без токена
+const WEBHOOK_URL = BASE_URL ? `${BASE_URL}${WEBHOOK_PATH}` : "";
+
+// ====== APP ======
+const app = express();
+
+// Telegram шлёт JSON — парсим
+app.use(express.json({ limit: "2mb" }));
+
+// Логи запросов (очень помогает)
+app.use(morgan("tiny"));
+
+// Healthcheck (для Render и для пингов)
+app.get("/", (_req, res) => res.status(200).send("ok"));
 app.get("/health", (_req, res) => res.status(200).send("ok"));
-app.get("/",        (_req, res) => res.status(200).send("ok"));
 
-// базовый URL (Render сам даёт RENDER_EXTERNAL_URL)
-const BASE_URL = process.env.WEBHOOK_URL || process.env.RENDER_EXTERNAL_URL || "";
-const HOOK_PATH = `/webhook/${BOT_TOKEN}`;
-const HOOK_URL  = BASE_URL ? `${BASE_URL}${HOOK_PATH}` : null;
+// Главная строка: Telegraf сам обрабатывает webhook и сам отвечает 200
+app.use(bot.webhookCallback(WEBHOOK_PATH));
 
-// ===== Start =====
+// ====== START ======
 async function start() {
-  if (HOOK_URL) {
-    // ---------- WEBHOOK ----------
-    await bot.telegram.setWebhook(HOOK_URL);
+  // 1) Всегда стартуем HTTP сервер
+  app.listen(PORT, async () => {
+    console.log(`✅ HTTP server listening on :${PORT}`);
 
-    // моментально 200, апдейт — асинхронно (важно для cold start)
-    app.post(HOOK_PATH, (req, res) => {
-      res.sendStatus(200);
-      bot.handleUpdate(req.body).catch(err => console.error("handleUpdate error:", err));
-    });
+    // 2) Если BASE_URL задан — работаем через webhook (Render)
+    if (BASE_URL) {
+      try {
+        await bot.telegram.setWebhook(WEBHOOK_URL);
+        console.log(`✅ Webhook set to: ${WEBHOOK_URL}`);
+      } catch (e) {
+        console.error("❌ Failed to set webhook:", e);
+      }
+    } else {
+      // 3) Если BASE_URL нет — локальная разработка через polling
+      try {
+        await bot.launch();
+        console.log("✅ Bot launched with long polling (BASE_URL is empty)");
+      } catch (e) {
+        console.error("❌ Failed to launch bot with polling:", e);
+      }
+    }
+  });
 
-    app.listen(PORT, () => {
-      console.log(`Webhook server listening on :${PORT}`);
-      console.log(`Webhook set to: ${HOOK_URL}`);
-    });
-  } else {
-    // ---------- POLLING ----------
-    await bot.telegram.deleteWebhook({ drop_pending_updates: false });
-    await bot.launch();
-    console.log("Long polling started (no BASE_URL set)");
-  }
+  // Graceful stop
+  process.once("SIGINT", () => bot.stop("SIGINT"));
+  process.once("SIGTERM", () => bot.stop("SIGTERM"));
 }
 
-start().catch((e) => {
-  console.error("Bot start error:", e);
-  process.exit(1);
-});
-
-// корректное завершение
-// process.once("SIGINT",  () => bot.stop("SIGINT"));
-// process.once("SIGTERM", () => bot.stop("SIGTERM"));
+start().catch((e) => console.error("❌ Fatal start error:", e));
