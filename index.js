@@ -1,46 +1,42 @@
-// index.js (root)
+// index.js (ESM)
 
-require("dotenv").config();
+import "dotenv/config";
+import express from "express";
+import morgan from "morgan";
 
-const express = require("express");
-const morgan = require("morgan");
+import { createBot } from "./bot/index.js";
 
-// Твой бот (экземпляр Telegraf)
-const bot = require("./bot");
-
-// ====== ENV ======
+// ===== ENV =====
 const PORT = process.env.PORT || 10000;
 
-// BASE_URL должен быть именно таким:
+// BASE_URL, например:
 // https://without-mask.onrender.com
 const BASE_URL = (process.env.BASE_URL || "").replace(/\/+$/, "");
 
-const WEBHOOK_PATH = "/webhook";              // без токена
+const WEBHOOK_PATH = "/webhook";
 const WEBHOOK_URL = BASE_URL ? `${BASE_URL}${WEBHOOK_PATH}` : "";
 
-// ====== APP ======
+// Создаём бота из твоей фабрики
+const bot = createBot(process.env);
+
+// ===== APP =====
 const app = express();
 
-// Telegram шлёт JSON — парсим
 app.use(express.json({ limit: "2mb" }));
-
-// Логи запросов (очень помогает)
 app.use(morgan("tiny"));
 
-// Healthcheck (для Render и для пингов)
+// Healthcheck
 app.get("/", (_req, res) => res.status(200).send("ok"));
 app.get("/health", (_req, res) => res.status(200).send("ok"));
 
-// Главная строка: Telegraf сам обрабатывает webhook и сам отвечает 200
+// Webhook handler (Telegraf сам отвечает 200)
 app.use(bot.webhookCallback(WEBHOOK_PATH));
 
-// ====== START ======
+// ===== START =====
 async function start() {
-  // 1) Всегда стартуем HTTP сервер
   app.listen(PORT, async () => {
     console.log(`✅ HTTP server listening on :${PORT}`);
 
-    // 2) Если BASE_URL задан — работаем через webhook (Render)
     if (BASE_URL) {
       try {
         await bot.telegram.setWebhook(WEBHOOK_URL);
@@ -49,19 +45,20 @@ async function start() {
         console.error("❌ Failed to set webhook:", e);
       }
     } else {
-      // 3) Если BASE_URL нет — локальная разработка через polling
+      // локальный режим (polling)
       try {
         await bot.launch();
-        console.log("✅ Bot launched with long polling (BASE_URL is empty)");
+        console.log("✅ Bot launched with long polling");
       } catch (e) {
-        console.error("❌ Failed to launch bot with polling:", e);
+        console.error("❌ Failed to launch bot:", e);
       }
     }
   });
 
-  // Graceful stop
   process.once("SIGINT", () => bot.stop("SIGINT"));
   process.once("SIGTERM", () => bot.stop("SIGTERM"));
 }
 
-start().catch((e) => console.error("❌ Fatal start error:", e));
+start().catch((e) => {
+  console.error("❌ Fatal error on start:", e);
+});
