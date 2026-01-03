@@ -2,7 +2,6 @@
 
 import "dotenv/config";
 import express from "express";
-import morgan from "morgan";
 
 import { createBot } from "./bot/index.js";
 
@@ -16,14 +15,13 @@ const BASE_URL = (process.env.BASE_URL || "").replace(/\/+$/, "");
 const WEBHOOK_PATH = "/webhook";
 const WEBHOOK_URL = BASE_URL ? `${BASE_URL}${WEBHOOK_PATH}` : "";
 
-// Создаём бота из твоей фабрики
+// Создаём бота
 const bot = createBot(process.env);
 
 // ===== APP =====
 const app = express();
 
 app.use(express.json({ limit: "2mb" }));
-app.use(morgan("tiny"));
 
 // Healthcheck
 app.get("/", (_req, res) => res.status(200).send("ok"));
