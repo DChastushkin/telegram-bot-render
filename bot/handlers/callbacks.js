@@ -174,11 +174,26 @@ export function registerCallbackHandlers(bot, env) {
 
           await ctx.editMessageReplyMarkup();
           try {
-            await ctx.telegram.sendMessage(
-              authorId,
-              "✅ Ваша тема опубликована.",
-              { reply_markup: memberMenu().reply_markup }
-            );
+            try {
+			  const { link, title } = await resolveChannelLink(ctx, CHANNEL_ID, CHANNEL_LINK);
+
+			  const text = link
+				? `✅ Ваша тема опубликована ❤️<br/><a href="${link}">Перейти в канал</a>`
+				: `✅ Ваша тема опубликована ❤️`;
+
+			  await ctx.telegram.sendMessage(
+				authorId,
+				text,
+				{
+				  parse_mode: "HTML",
+				  disable_web_page_preview: true,
+				  reply_markup: memberMenu().reply_markup
+				}
+			  );
+			} catch (e) {
+			  console.error("publish notify error:", e);
+			}
+
           } catch {}
 
           pendingSubmissions.delete(control.message_id);
