@@ -178,7 +178,7 @@ export function registerCallbackHandlers(bot, env) {
 			  const { link, title } = await resolveChannelLink(ctx, CHANNEL_ID, CHANNEL_LINK);
 
 			  const text = link
-				? `✅ Ваша тема опубликована ❤️<br/><a href="${link}">Перейти в канал</a>`
+				? `✅ Ваша тема опубликована ❤️<br><a href="${link}">Перейти в канал</a>`
 				: `✅ Ваша тема опубликована ❤️`;
 
 			  await ctx.telegram.sendMessage(
