@@ -6,14 +6,16 @@ import express from "express";
 import { createBot } from "./bot/index.js";
 import state from "./bot/state.js";
 
-const { channelToDiscussion } = state;
+const {
+  channelToDiscussion,
+  pendingAnonReplies
+} = state;
 
 // ===== ENV =====
 const BOT_MODE = process.env.BOT_MODE || "prod";
 const PORT = process.env.PORT || 10000;
 
 // BASE_URL обязателен на Render
-// пример: https://telegram-bot-render-eimj.onrender.com
 const BASE_URL = (process.env.BASE_URL || "").replace(/\/+$/, "");
 const WEBHOOK_PATH = "/webhook";
 
@@ -36,6 +38,77 @@ console.log("================================");
 // ===== BOT =====
 const bot = createBot(process.env);
 
+// ===================================================
+// 1️⃣ /start anon:<channelMsgId>
+// ===================================================
+bot.start(async (ctx) => {
+  const payload = ctx.startPayload;
+
+  if (payload && payload.startsWith("anon:")) {
+    const channelMsgId = Number(payload.split(":")[1]);
+
+    if (!channelMsgId) {
+      await ctx.reply("Некорректная ссылка.");
+      return;
+    }
+
+    pendingAnonReplies.set(ctx.from.id, {
+      channelMsgId,
+      createdAt: Date.now()
+    });
+
+    await ctx.reply(
+      "🕶 Напишите анонимный комментарий к теме.\nОн будет опубликован без указания автора."
+    );
+    return;
+  }
+
+  // обычный /start — ничего не ломаем
+  await ctx.reply(
+    "Привет! Используйте меню ниже 👇"
+  );
+});
+
+// ===================================================
+// 2️⃣ Приём текста анонимного комментария
+// ===================================================
+bot.on("text", async (ctx, next) => {
+  const uid = ctx.from.id;
+  const pending = pendingAnonReplies.get(uid);
+
+  if (!pending) return next();
+
+  const { channelMsgId } = pending;
+  const link = channelToDiscussion.get(channelMsgId);
+
+  if (!link) {
+    await ctx.reply(
+      "⚠️ Обсуждение к этой теме пока не найдено.\nПопробуйте чуть позже."
+    );
+    return;
+  }
+
+  const { discussionChatId, discussionMsgId } = link;
+
+  try {
+    await ctx.telegram.sendMessage(
+      discussionChatId,
+      ctx.message.text,
+      {
+        reply_to_message_id: discussionMsgId
+      }
+    );
+
+    await ctx.reply("✅ Анонимный комментарий опубликован.");
+
+  } catch (e) {
+    console.error("❌ Failed to post anon comment:", e);
+    await ctx.reply("❌ Не удалось опубликовать комментарий.");
+  } finally {
+    pendingAnonReplies.delete(uid);
+  }
+});
+
 // ===== DISCUSSION GROUP LISTENER =====
 //
 // Telegram присылает сообщение в группе,
@@ -45,9 +118,6 @@ bot.on("message", (ctx, next) => {
   const msg = ctx.message;
   if (!msg) return next();
 
-  // Нас интересуют ТОЛЬКО сообщения:
-  // - из группы
-  // - которые являются forward'ом из канала
   if (
     msg.forward_from_chat &&
     msg.forward_from_chat.type === "channel" &&
@@ -89,7 +159,6 @@ async function start() {
     console.log(`✅ HTTP server listening on :${PORT}`);
 
     try {
-      // гарантируем, что polling выключен
       await bot.telegram.deleteWebhook({ drop_pending_updates: true });
       await bot.telegram.setWebhook(WEBHOOK_URL);
       console.log(`✅ Webhook set to: ${WEBHOOK_URL}`);
