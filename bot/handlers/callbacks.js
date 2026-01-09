@@ -1,5 +1,5 @@
 // bot/handlers/callbacks.js
-import { isOldQueryError, safeSendMessage, safeCopyMessage } from "../utils.js";
+import { isOldQueryError, safeSendMessage } from "../utils.js";
 import { memberMenu, choiceKeyboard } from "../ui.js";
 import { submitDraftToModeration } from "../submit.js";
 import {
