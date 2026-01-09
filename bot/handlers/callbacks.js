@@ -1,12 +1,11 @@
 // bot/handlers/callbacks.js
-import state from "../state.js";
-import { submitDraftToModeration } from "../submit.js";
-
-const {
+import {
   composingDrafts,
   pendingSubmissions,
   channelToDiscussion,
-} = state;
+} from "../state.js";
+
+import { submitDraftToModeration } from "../submit.js";
 
 export function registerCallbackHandlers(bot, env) {
   bot.on("callback_query", async (ctx) => {
@@ -17,9 +16,9 @@ export function registerCallbackHandlers(bot, env) {
       const data = JSON.parse(raw);
       const type = data.t;
 
-      /* =========================
-       * ВЫБОР ТИПА ТЕМЫ
-       * ========================= */
+      // ======================
+      // ВЫБОР ТИПА ТЕМЫ
+      // ======================
       if (type === "choose") {
         composingDrafts.set(ctx.from.id, {
           intent: data.v,
@@ -27,15 +26,14 @@ export function registerCallbackHandlers(bot, env) {
         });
 
         await ctx.editMessageText(
-          "✏️ Напишите сообщение. Можно отправить несколько сообщений.\nКогда закончите — нажмите «Готово».",
-          { reply_markup: undefined }
+          "✏️ Напишите сообщение. Можно отправить несколько сообщений.\nКогда закончите — нажмите «Готово»."
         );
         return;
       }
 
-      /* =========================
-       * ГОТОВО → НА МОДЕРАЦИЮ
-       * ========================= */
+      // ======================
+      // ГОТОВО → МОДЕРАЦИЯ
+      // ======================
       if (type === "compose_done") {
         const draft = composingDrafts.get(ctx.from.id);
         if (!draft || !draft.items.length) {
@@ -60,11 +58,14 @@ export function registerCallbackHandlers(bot, env) {
         return;
       }
 
-      /* =========================
-       * ПУБЛИКАЦИЯ АДМИНОМ
-       * ========================= */
+      // ======================
+      // ПУБЛИКАЦИЯ
+      // ======================
       if (type === "publish") {
-        const entry = pendingSubmissions.get(ctx.callbackQuery.message.message_id);
+        const entry = pendingSubmissions.get(
+          ctx.callbackQuery.message.message_id
+        );
+
         if (!entry) {
           await ctx.answerCbQuery("Черновик не найден");
           return;
@@ -101,11 +102,14 @@ export function registerCallbackHandlers(bot, env) {
         return;
       }
 
-      /* =========================
-       * ОТКЛОНЕНИЕ
-       * ========================= */
+      // ======================
+      // ОТКЛОНЕНИЕ
+      // ======================
       if (type === "reject") {
-        const entry = pendingSubmissions.get(ctx.callbackQuery.message.message_id);
+        const entry = pendingSubmissions.get(
+          ctx.callbackQuery.message.message_id
+        );
+
         if (entry) {
           await ctx.telegram.sendMessage(
             entry.authorId,
