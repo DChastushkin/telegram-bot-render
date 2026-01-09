@@ -30,10 +30,6 @@ function detectContentMeta(msg) {
     return { kind: "audio", supportsCaption: true, text: msg.caption || "", entities: msg.caption_entities || [] };
   if (msg.voice)
     return { kind: "voice", supportsCaption: true, text: msg.caption || "", entities: msg.caption_entities || [] };
-  if (msg.video_note)
-    return { kind: "video_note", supportsCaption: false, text: "", entities: [] };
-  if (msg.sticker)
-    return { kind: "sticker", supportsCaption: false, text: "", entities: [] };
   return { kind: "other", supportsCaption: false, text: "", entities: [] };
 }
 
@@ -61,7 +57,6 @@ export function registerModerationHandlers(bot, env) {
 
   bot.on("message", async (ctx, next) => {
     try {
-      // Админ: причины отклонения
       if (String(ctx.chat?.id) === String(ADMIN_CHAT_ID)) {
         const replyTo = ctx.message?.reply_to_message;
         if (replyTo) {
@@ -74,16 +69,16 @@ export function registerModerationHandlers(bot, env) {
 
       const uid = ctx.from.id;
 
-      // Старт темы
       if (awaitingTopic.has(uid)) {
         if (!(await isMember(ctx, CHANNEL_ID))) {
           awaitingTopic.delete(uid);
           await showNonMemberHint(ctx);
           return;
         }
-        awaitingTopic.delete(uid);
 
+        awaitingTopic.delete(uid);
         const meta = detectContentMeta(ctx.message);
+
         pendingDrafts.set(uid, {
           items: [{ srcChatId: ctx.chat.id, srcMsgId: ctx.message.message_id, ...meta }]
         });
@@ -95,7 +90,6 @@ export function registerModerationHandlers(bot, env) {
         return;
       }
 
-      // Накопление черновика
       if (pendingDrafts.has(uid) && !awaitingIntent.has(uid)) {
         const meta = detectContentMeta(ctx.message);
         const session = pendingDrafts.get(uid);
@@ -104,7 +98,6 @@ export function registerModerationHandlers(bot, env) {
         return;
       }
 
-      // После «Готово»
       if (pendingDrafts.has(uid) && awaitingIntent.has(uid) && "text" in ctx.message) {
         const t = (ctx.message.text || "").trim();
         if (t === "1" || t === "2") {
@@ -116,30 +109,42 @@ export function registerModerationHandlers(bot, env) {
             { user: ctx.from, draft: session, intent }
           );
 
-          // result.channelMessageId должен вернуться из submitDraftToModeration
           if (result?.channelMessageId && BOT_USERNAME) {
             const anonLink = `https://t.me/${BOT_USERNAME}?start=anon_${result.channelMessageId}`;
-            await ctx.telegram.sendMessage(
+
+            await ctx.telegram.editMessageReplyMarkup(
               CHANNEL_ID,
-              `<a href="${anonLink}">💬 Ответить анонимно</a>`,
-              { parse_mode: "HTML" }
+              result.channelMessageId,
+              null,
+              {
+                inline_keyboard: [
+                  [{ text: "💬 Ответить анонимно", url: anonLink }]
+                ]
+              }
             );
+
+            const channelLink = `https://t.me/c/${String(CHANNEL_ID).replace("-100", "")}/${result.channelMessageId}`;
+
+            await ctx.reply(
+              `✅ Тема опубликована:\n${channelLink}`,
+              memberMenu()
+            );
+          } else {
+            await ctx.reply("Тема опубликована.", memberMenu());
           }
 
           pendingDrafts.delete(uid);
           awaitingIntent.delete(uid);
-
-          await ctx.reply("Тема опубликована.", memberMenu());
-          return;
-        } else {
-          await ctx.reply("Пожалуйста, нажмите кнопку выше или отправьте «1» / «2».");
           return;
         }
+
+        await ctx.reply("Пожалуйста, выберите вариант выше.");
+        return;
       }
 
       return next();
     } catch (e) {
-      console.error("message handler error:", e);
+      console.error("moderation error:", e);
       return next();
     }
   });
