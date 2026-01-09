@@ -86,6 +86,7 @@ function joinTextWithEntities(segments, sep = "\n\n") {
 
 /**
  * ❗ ЭТУ ФУНКЦИЮ ИСПОЛЬЗУЮТ moderation.js и callbacks.js
+ * ❗ КНОПКИ МОДЕРАЦИИ ВОССТАНОВЛЕНЫ
  */
 export async function submitDraftToModeration(
   { telegram, ADMIN_CHAT_ID },
@@ -117,7 +118,17 @@ export async function submitDraftToModeration(
   const preview = await telegram.sendMessage(
     ADMIN_CHAT_ID,
     combined,
-    { entities: finalEntities }
+    {
+      entities: finalEntities,
+      reply_markup: {
+        inline_keyboard: [
+          [
+            { text: "✅ Одобрить", callback_data: "approve" },
+            { text: "❌ Отклонить", callback_data: "reject" }
+          ]
+        ]
+      }
+    }
   );
 
   if (preview) {
