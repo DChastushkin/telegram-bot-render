@@ -2,7 +2,6 @@ import {
   newUserMenu,
   memberMenu,
   composeKeyboard,
-  choiceKeyboard,
   showNonMemberHint
 } from "../ui.js";
 import { isMember, handleRejectionReason } from "../utils.js";
@@ -34,7 +33,7 @@ function detectContentMeta(msg) {
 }
 
 export function registerModerationHandlers(bot, env) {
-  const { CHANNEL_ID, ADMIN_CHAT_ID, BOT_USERNAME } = env;
+  const { CHANNEL_ID, ADMIN_CHAT_ID } = env;
 
   bot.hears("📝 Предложить тему/вопрос", async (ctx) => {
     if (!(await isMember(ctx, CHANNEL_ID))) {
@@ -61,10 +60,16 @@ export function registerModerationHandlers(bot, env) {
         const replyTo = ctx.message?.reply_to_message;
         if (replyTo) {
           const entry = pendingRejections.get(replyTo.message_id);
-          if (entry) { await handleRejectionReason(ctx, entry, { ADMIN_CHAT_ID }); return; }
+          if (entry) {
+            await handleRejectionReason(ctx, entry, { ADMIN_CHAT_ID });
+            return;
+          }
         }
         const planB = pendingRejectionsByAdmin.get(ctx.from.id);
-        if (planB) { await handleRejectionReason(ctx, planB, { ADMIN_CHAT_ID }); return; }
+        if (planB) {
+          await handleRejectionReason(ctx, planB, { ADMIN_CHAT_ID });
+          return;
+        }
       }
 
       const uid = ctx.from.id;
@@ -109,28 +114,11 @@ export function registerModerationHandlers(bot, env) {
             { user: ctx.from, draft: session, intent }
           );
 
-          if (result?.channelMessageId && BOT_USERNAME) {
-            const anonLink = `https://t.me/${BOT_USERNAME}?start=anon_${result.channelMessageId}`;
-
-            await ctx.telegram.editMessageReplyMarkup(
-              CHANNEL_ID,
-              result.channelMessageId,
-              null,
-              {
-                inline_keyboard: [
-                  [{ text: "💬 Ответить анонимно", url: anonLink }]
-                ]
-              }
-            );
-
+          if (result?.channelMessageId) {
             const channelLink = `https://t.me/c/${String(CHANNEL_ID).replace("-100", "")}/${result.channelMessageId}`;
-
-            await ctx.reply(
-              `✅ Тема опубликована:\n${channelLink}`,
-              memberMenu()
-            );
+            await ctx.reply(`✅ Тема опубликована:\n${channelLink}`, memberMenu());
           } else {
-            await ctx.reply("Тема опубликована.", memberMenu());
+            await ctx.reply("✅ Тема опубликована.", memberMenu());
           }
 
           pendingDrafts.delete(uid);
