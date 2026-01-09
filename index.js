@@ -4,7 +4,9 @@ import "dotenv/config";
 import express from "express";
 
 import { createBot } from "./bot/index.js";
-import { channelToDiscussion } from "./bot/state.js";
+import state from "./bot/state.js";
+
+const { channelToDiscussion } = state;
 
 // ===== ENV =====
 const BOT_MODE = process.env.BOT_MODE || "prod";
