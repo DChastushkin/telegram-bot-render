@@ -1,6 +1,6 @@
 // bot/submit.js
 import state from "./state.js";
-import { safeSendMessage, safeCopyMessage } from "./utils.js";
+import { safeSendMessage } from "./utils.js";
 
 const {
   pendingSubmissions,
@@ -36,7 +36,6 @@ export async function tryHandleAnonReply(ctx) {
       ctx.message.text,
       { reply_to_message_id: discussionMsgId }
     );
-
     await ctx.reply("✅ Анонимный комментарий опубликован.");
   } catch (e) {
     console.error("Anon reply error:", e);
@@ -49,7 +48,7 @@ export async function tryHandleAnonReply(ctx) {
 }
 
 /* =====================================================
- * 📝 САБМИТ ТЕМЫ НА МОДЕРАЦИЮ (СТАРАЯ ЛОГИКА)
+ * 📝 САБМИТ ТЕМЫ НА МОДЕРАЦИЮ (РАБОЧАЯ ЛОГИКА)
  * ===================================================== */
 
 export const intentLabel = (intent) =>
@@ -58,13 +57,12 @@ export const intentLabel = (intent) =>
 const ADVICE_HEADER  = "Новое обращение от подписчика - требуется обратная связь";
 const EXPRESS_HEADER = "Новая тема от подписчика";
 
-// смещение entities
+// helpers
 function shiftEntities(entities = [], shift = 0) {
   if (!Array.isArray(entities) || shift === 0) return entities;
   return entities.map(e => ({ ...e, offset: e.offset + shift }));
 }
 
-// склейка текста
 function joinTextWithEntities(segments, sep = "\n\n") {
   const parts = [];
   const outEntities = [];
@@ -88,8 +86,8 @@ function joinTextWithEntities(segments, sep = "\n\n") {
 }
 
 /**
- * ❗ ЭТУ ФУНКЦИЮ ЖДУТ moderation.js и callbacks.js
- * ❗ ЕЁ НЕЛЬЗЯ УДАЛЯТЬ
+ * ❗ ЭТУ ФУНКЦИЮ ИСПОЛЬЗУЮТ moderation.js и callbacks.js
+ * ❗ ОНА ДОЛЖНА БЫТЬ
  */
 export async function submitDraftToModeration(
   { telegram, ADMIN_CHAT_ID },
