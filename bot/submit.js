@@ -1,6 +1,5 @@
 // bot/submit.js
 import state from "./state.js";
-import { safeSendMessage } from "./utils.js";
 
 const {
   pendingSubmissions,
@@ -48,7 +47,7 @@ export async function tryHandleAnonReply(ctx) {
 }
 
 /* =====================================================
- * 📝 САБМИТ ТЕМЫ НА МОДЕРАЦИЮ (РАБОЧАЯ ЛОГИКА)
+ * 📝 САБМИТ ТЕМЫ НА МОДЕРАЦИЮ
  * ===================================================== */
 
 export const intentLabel = (intent) =>
@@ -87,7 +86,6 @@ function joinTextWithEntities(segments, sep = "\n\n") {
 
 /**
  * ❗ ЭТУ ФУНКЦИЮ ИСПОЛЬЗУЮТ moderation.js и callbacks.js
- * ❗ ОНА ДОЛЖНА БЫТЬ
  */
 export async function submitDraftToModeration(
   { telegram, ADMIN_CHAT_ID },
@@ -102,7 +100,7 @@ export async function submitDraftToModeration(
     `Имя: ${[user.first_name, user.last_name].filter(Boolean).join(" ") || "—"}\n` +
     `Тип обращения: ${intentLabel(intent)}`;
 
-  await safeSendMessage(telegram, ADMIN_CHAT_ID, info);
+  await telegram.sendMessage(ADMIN_CHAT_ID, info);
 
   const items = draft.items || [];
   const textSegments = items
@@ -116,8 +114,7 @@ export async function submitDraftToModeration(
     body ? header.length + 2 : 0
   );
 
-  const preview = await safeSendMessage(
-    telegram,
+  const preview = await telegram.sendMessage(
     ADMIN_CHAT_ID,
     combined,
     { entities: finalEntities }
