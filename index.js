@@ -4,6 +4,7 @@ import "dotenv/config";
 import express from "express";
 
 import { createBot } from "./bot/index.js";
+import { channelToDiscussion } from "./bot/state.js";
 
 // ===== ENV =====
 const BOT_MODE = process.env.BOT_MODE || "prod";
@@ -33,6 +34,42 @@ console.log("================================");
 // ===== BOT =====
 const bot = createBot(process.env);
 
+// ===== DISCUSSION GROUP LISTENER =====
+//
+// Telegram присылает сообщение в группе,
+// которое является forward'ом из канала.
+// Это и есть discussion message.
+bot.on("message", (ctx, next) => {
+  const msg = ctx.message;
+  if (!msg) return next();
+
+  // Нас интересуют ТОЛЬКО сообщения:
+  // - из группы
+  // - которые являются forward'ом из канала
+  if (
+    msg.forward_from_chat &&
+    msg.forward_from_chat.type === "channel" &&
+    typeof msg.forward_from_message_id === "number"
+  ) {
+    const channelMsgId = msg.forward_from_message_id;
+    const discussionChatId = msg.chat.id;
+    const discussionMsgId = msg.message_id;
+
+    channelToDiscussion.set(channelMsgId, {
+      discussionChatId,
+      discussionMsgId,
+    });
+
+    console.log(
+      "💬 Discussion linked:",
+      `channelMsgId=${channelMsgId}`,
+      `→ discussionChatId=${discussionChatId}, discussionMsgId=${discussionMsgId}`
+    );
+  }
+
+  return next();
+});
+
 // ===== APP =====
 const app = express();
 app.use(express.json({ limit: "2mb" }));
@@ -50,7 +87,7 @@ async function start() {
     console.log(`✅ HTTP server listening on :${PORT}`);
 
     try {
-      // на всякий случай чистим polling
+      // гарантируем, что polling выключен
       await bot.telegram.deleteWebhook({ drop_pending_updates: true });
       await bot.telegram.setWebhook(WEBHOOK_URL);
       console.log(`✅ Webhook set to: ${WEBHOOK_URL}`);
