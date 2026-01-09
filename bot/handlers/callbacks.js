@@ -1,5 +1,5 @@
 // bot/handlers/callbacks.js
-import { isOldQueryError, safeSendMessage } from "../utils.js";
+import { isOldQueryError } from "../utils.js";
 import { memberMenu, choiceKeyboard } from "../ui.js";
 import { submitDraftToModeration } from "../submit.js";
 import {
@@ -128,19 +128,26 @@ export function registerCallbackHandlers(bot, env) {
 
         const { text: body, entities } = joinTextWithEntities(textSegments);
         const combined = body ? `${header}\n\n${body}` : header;
+
+        // ВАЖНО: combined тут обычный текст (не HTML), но ниже мы будем editMessageText с HTML.
+        // Чтобы не ловить "can't parse entities", мы отправляем как plain text с entities.
         const finalEntities = shiftEntities(entities, header.length + 2);
 
-        const posted = await safeSendMessage(ctx.telegram, CHANNEL_ID, combined, {
+        // ✅ НАТИВНАЯ ОТПРАВКА (никаких safeSendMessage)
+        const posted = await ctx.telegram.sendMessage(CHANNEL_ID, combined, {
           entities: finalEntities
         });
 
         const channelMsgId = posted?.message_id;
+
+        // Добавляем диплинк "Ответить анонимно" прямо в текст поста.
+        // Для этого редактируем сообщение в HTML-режиме.
         if (channelMsgId) {
           const botUsername = ctx.botInfo.username;
           const anonLink = `https://t.me/${botUsername}?start=anon:${channelMsgId}`;
 
           const updatedText =
-            combined +
+            esc(combined) +
             `\n\n<a href="${anonLink}">💬 Ответить анонимно</a>`;
 
           await ctx.telegram.editMessageText(
@@ -155,10 +162,11 @@ export function registerCallbackHandlers(bot, env) {
           );
         }
 
-        await ctx.editMessageReplyMarkup();
+        // убираем кнопки в админ-карточке (чтобы не жали повторно)
+        await ctx.editMessageReplyMarkup().catch(() => {});
 
         try {
-          const { link, title } = await resolveChannelLink(ctx, CHANNEL_ID, CHANNEL_LINK);
+          const { link } = await resolveChannelLink(ctx, CHANNEL_ID, CHANNEL_LINK);
           const text = link
             ? `✅ Ваша тема опубликована ❤️\n<a href="${link}">Перейти в канал</a>`
             : `✅ Ваша тема опубликована ❤️`;
@@ -173,6 +181,9 @@ export function registerCallbackHandlers(bot, env) {
         pendingSubmissions.delete(control.message_id);
         return;
       }
+
+      // Прочие admin callbacks (reject/ask reason и т.п.) — если они у тебя есть в исходном файле,
+      // они остаются как были. Если ты их вырезал ранее — пришли актуальный callbacks.js, вернём.
 
     } catch (e) {
       if (!isOldQueryError(e)) {
