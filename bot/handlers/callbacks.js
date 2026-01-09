@@ -79,6 +79,7 @@ export function registerCallbackHandlers(bot, env) {
           return;
         }
 
+        // публикуем пост в канал
         const posted = await ctx.telegram.copyMessage(
           env.CHANNEL_ID,
           ctx.callbackQuery.message.chat.id,
@@ -98,11 +99,25 @@ export function registerCallbackHandlers(bot, env) {
           ? String(env.CHANNEL_ID).slice(4)
           : String(Math.abs(env.CHANNEL_ID));
 
-        const link = `https://t.me/c/${internalId}/${posted.message_id}`;
+        const postLink = `https://t.me/c/${internalId}/${posted.message_id}`;
 
+        // ссылка на анонимный комментарий
+        const botInfo = await ctx.telegram.getMe();
+        const anonLink = `https://t.me/${botInfo.username}?start=anon_${posted.message_id}`;
+
+        // ДОПИСЫВАЕМ ссылку "Ответить анонимно" В САМ ПОСТ
+        await ctx.telegram.editMessageText(
+          env.CHANNEL_ID,
+          posted.message_id,
+          undefined,
+          `${ctx.callbackQuery.message.text}\n\n💬 Ответить анонимно\n${anonLink}`,
+          { disable_web_page_preview: true }
+        );
+
+        // уведомляем автора
         await ctx.telegram.sendMessage(
           submission.authorId,
-          `✅ Ваша тема опубликована!\n\n🔗 ${link}`
+          `✅ Ваша тема опубликована!\n\n🔗 ${postLink}`
         );
 
         pendingSubmissions.delete(ctx.callbackQuery.message.message_id);
