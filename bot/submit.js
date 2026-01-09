@@ -86,7 +86,7 @@ function joinTextWithEntities(segments, sep = "\n\n") {
 
 /**
  * ❗ ЭТУ ФУНКЦИЮ ИСПОЛЬЗУЮТ moderation.js и callbacks.js
- * ❗ КНОПКИ МОДЕРАЦИИ ВОССТАНОВЛЕНЫ
+ * ❗ КНОПКИ МОДЕРАЦИИ — В ФОРМАТЕ JSON, КАК ЖДЁТ callbacks.js
  */
 export async function submitDraftToModeration(
   { telegram, ADMIN_CHAT_ID },
@@ -115,6 +115,7 @@ export async function submitDraftToModeration(
     body ? header.length + 2 : 0
   );
 
+  // callbacks.js парсит JSON и ждёт data.t === "publish" / "reject"
   const preview = await telegram.sendMessage(
     ADMIN_CHAT_ID,
     combined,
@@ -123,8 +124,8 @@ export async function submitDraftToModeration(
       reply_markup: {
         inline_keyboard: [
           [
-            { text: "✅ Одобрить", callback_data: "approve" },
-            { text: "❌ Отклонить", callback_data: "reject" }
+            { text: "✅ Одобрить", callback_data: JSON.stringify({ t: "publish" }) },
+            { text: "❌ Отклонить", callback_data: JSON.stringify({ t: "reject" }) }
           ]
         ]
       }
