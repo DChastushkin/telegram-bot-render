@@ -1,4 +1,3 @@
-// bot/handlers/moderation.js
 import {
   newUserMenu,
   memberMenu,
@@ -39,9 +38,8 @@ function detectContentMeta(msg) {
 }
 
 export function registerModerationHandlers(bot, env) {
-  const { CHANNEL_ID, ADMIN_CHAT_ID } = env;
+  const { CHANNEL_ID, ADMIN_CHAT_ID, BOT_USERNAME } = env;
 
-  // Старт ввода темы
   bot.hears("📝 Предложить тему/вопрос", async (ctx) => {
     if (!(await isMember(ctx, CHANNEL_ID))) {
       await showNonMemberHint(ctx);
@@ -51,7 +49,6 @@ export function registerModerationHandlers(bot, env) {
     await ctx.reply("Напишите вашу тему одним сообщением.");
   });
 
-  // Отмена любого сценария
   bot.command("cancel", async (ctx) => {
     awaitingTopic.delete(ctx.from.id);
     pendingDrafts.delete(ctx.from.id);
@@ -62,10 +59,9 @@ export function registerModerationHandlers(bot, env) {
     );
   });
 
-  // Общий обработчик входящих сообщений
   bot.on("message", async (ctx, next) => {
     try {
-      // 0) Обработка причины отклонения в админ-чате
+      // Админ: причины отклонения
       if (String(ctx.chat?.id) === String(ADMIN_CHAT_ID)) {
         const replyTo = ctx.message?.reply_to_message;
         if (replyTo) {
@@ -78,7 +74,7 @@ export function registerModerationHandlers(bot, env) {
 
       const uid = ctx.from.id;
 
-      // 1) Первое сообщение темы (вход в режим черновика)
+      // Старт темы
       if (awaitingTopic.has(uid)) {
         if (!(await isMember(ctx, CHANNEL_ID))) {
           awaitingTopic.delete(uid);
@@ -93,13 +89,13 @@ export function registerModerationHandlers(bot, env) {
         });
 
         await ctx.reply(
-          "Принято. Можете добавить ещё текст/медиа/стикеры.\nКогда закончите — нажмите «✅ Готово».",
+          "Принято. Можете добавить ещё текст/медиа.\nКогда закончите — нажмите «✅ Готово».",
           composeKeyboard()
         );
         return;
       }
 
-      // 2) Продолжение черновика — накапливаем сообщения
+      // Накопление черновика
       if (pendingDrafts.has(uid) && !awaitingIntent.has(uid)) {
         const meta = detectContentMeta(ctx.message);
         const session = pendingDrafts.get(uid);
@@ -108,22 +104,35 @@ export function registerModerationHandlers(bot, env) {
         return;
       }
 
-      // 3) Fallback «1/2» после «Готово»
+      // После «Готово»
       if (pendingDrafts.has(uid) && awaitingIntent.has(uid) && "text" in ctx.message) {
         const t = (ctx.message.text || "").trim();
         if (t === "1" || t === "2") {
           const session = pendingDrafts.get(uid);
           const intent = t === "1" ? "advice" : "express";
-          await submitDraftToModeration(
+
+          const result = await submitDraftToModeration(
             { telegram: ctx.telegram, ADMIN_CHAT_ID },
             { user: ctx.from, draft: session, intent }
           );
+
+          // result.channelMessageId должен вернуться из submitDraftToModeration
+          if (result?.channelMessageId && BOT_USERNAME) {
+            const anonLink = `https://t.me/${BOT_USERNAME}?start=anon_${result.channelMessageId}`;
+            await ctx.telegram.sendMessage(
+              CHANNEL_ID,
+              `<a href="${anonLink}">💬 Ответить анонимно</a>`,
+              { parse_mode: "HTML" }
+            );
+          }
+
           pendingDrafts.delete(uid);
           awaitingIntent.delete(uid);
-          await ctx.reply("Тема отправлена на модерацию.", memberMenu());
+
+          await ctx.reply("Тема опубликована.", memberMenu());
           return;
         } else {
-          await ctx.reply("Пожалуйста, нажмите кнопку выше или отправьте «1» / «2»."); 
+          await ctx.reply("Пожалуйста, нажмите кнопку выше или отправьте «1» / «2».");
           return;
         }
       }
