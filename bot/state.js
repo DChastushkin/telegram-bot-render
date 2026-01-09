@@ -1,29 +1,48 @@
 // bot/state.js
 
-// ===== Existing state =====
+// =======================
+// ОСНОВНОЙ ФЛОУ ТЕМ
+// =======================
 
-// ожидание начала темы (старый флоу)
+// userId -> true
+// Ожидание, что пользователь начнёт ввод темы
 export const awaitingTopic = new Set();
 
-// userId -> { items: [{ srcChatId, srcMsgId, kind, supportsCaption, text, entities }] }
+// userId -> {
+//   items: [
+//     {
+//       kind: "text" | "photo" | "video" | "document",
+//       text?: string,
+//       caption?: string,
+//       entities?: any[]
+//     }
+//   ]
+// }
+// Черновик темы (внутренний, пользователь о нём не знает)
 export const pendingDrafts = new Map();
 
-// replyMsgId -> entry
-export const pendingRejections = new Map();
-
-// adminId -> entry
-export const pendingRejectionsByAdmin = new Map();
-
-// controlMsgId -> { authorId, intent, adminCopyMsgIds?, items: [{...}] }
+// controlMsgId -> submission
+// Активные заявки на модерации (сообщения в админ-чате)
 export const pendingSubmissions = new Map();
 
-// userId, ожидаем выбор intent
+// replyMsgId -> submission
+// Для отклонений (ответ админа на конкретное сообщение)
+export const pendingRejections = new Map();
+
+// adminId -> submission
+export const pendingRejectionsByAdmin = new Map();
+
+// userId -> true
+// Ожидание выбора типа обращения (нужен совет / хочу высказаться)
 export const awaitingIntent = new Set();
 
-// ===== NEW: anonymous replies =====
+
+// =======================
+// АНОНИМНЫЕ ОТВЕТЫ
+// =======================
 
 // userId -> {
-//   channelMsgId: number,   // id сообщения в канале, под которым нажали "Ответить анонимно"
+//   channelMsgId: number,
 //   createdAt: number
 // }
 export const pendingAnonReplies = new Map();
@@ -32,16 +51,19 @@ export const pendingAnonReplies = new Map();
 //   discussionChatId: number,
 //   discussionMsgId: number
 // }
-//
-// Заполняется в момент публикации поста в канал,
-// чтобы потом знать, куда отвечать в обсуждениях.
 export const channelToDiscussion = new Map();
+
+
+// =======================
+// EXPORT
+// =======================
+
 export default {
   awaitingTopic,
   pendingDrafts,
+  pendingSubmissions,
   pendingRejections,
   pendingRejectionsByAdmin,
-  pendingSubmissions,
   awaitingIntent,
   pendingAnonReplies,
   channelToDiscussion,
