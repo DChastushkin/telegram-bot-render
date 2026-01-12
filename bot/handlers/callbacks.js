@@ -1,5 +1,3 @@
-// bot/handlers/callbacks.js
-
 import {
   pendingDrafts,
   pendingSubmissions,
@@ -79,11 +77,13 @@ export function registerCallbackHandlers(bot, env) {
           return;
         }
 
-        // публикуем пост в канал
-        const posted = await ctx.telegram.copyMessage(
+        const originalText = ctx.callbackQuery.message.text;
+
+        // ПУБЛИКУЕМ В КАНАЛ ЧЕРЕЗ sendMessage (НЕ copyMessage!)
+        const posted = await ctx.telegram.sendMessage(
           env.CHANNEL_ID,
-          ctx.callbackQuery.message.chat.id,
-          ctx.callbackQuery.message.message_id
+          originalText,
+          { parse_mode: "HTML", disable_web_page_preview: true }
         );
 
         // сохраняем связку канал → обсуждение
@@ -94,24 +94,23 @@ export function registerCallbackHandlers(bot, env) {
           });
         }
 
-        // ссылка на пост в приватном канале
+        // формируем ссылки
         const internalId = String(env.CHANNEL_ID).startsWith("-100")
           ? String(env.CHANNEL_ID).slice(4)
           : String(Math.abs(env.CHANNEL_ID));
 
         const postLink = `https://t.me/c/${internalId}/${posted.message_id}`;
+        const anonLink = `https://t.me/${env.BOT_USERNAME}?start=anon_${posted.message_id}`;
 
-        // ссылка на анонимный комментарий
-        const botInfo = await ctx.telegram.getMe();
-        const anonLink = `https://t.me/${botInfo.username}?start=anon_${posted.message_id}`;
+        // ДОБАВЛЯЕМ HTML-ЯКОРЬ "Ответить анонимно"
+        const finalText = `${originalText}\n\n<a href="${anonLink}">💬 Ответить анонимно</a>`;
 
-        // ДОПИСЫВАЕМ ссылку "Ответить анонимно" В САМ ПОСТ
         await ctx.telegram.editMessageText(
           env.CHANNEL_ID,
           posted.message_id,
           undefined,
-          `${ctx.callbackQuery.message.text}\n\n💬 Ответить анонимно\n${anonLink}`,
-          { disable_web_page_preview: true }
+          finalText,
+          { parse_mode: "HTML", disable_web_page_preview: true }
         );
 
         // уведомляем автора
