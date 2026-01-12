@@ -1,4 +1,3 @@
-// bot/submit.js
 import state from "./state.js";
 
 const {
@@ -53,7 +52,7 @@ export async function tryHandleAnonReply(ctx) {
 export const intentLabel = (intent) =>
   intent === "advice" ? "нужен совет" : "хочу высказаться";
 
-const ADVICE_HEADER  = "Новое обращение от подписчика - требуется обратная связь";
+const ADVICE_HEADER  = "Новое обращение от подписчика — требуется обратная связь";
 const EXPRESS_HEADER = "Новая тема от подписчика";
 
 // helpers
@@ -86,10 +85,9 @@ function joinTextWithEntities(segments, sep = "\n\n") {
 
 /**
  * ❗ ЭТУ ФУНКЦИЮ ИСПОЛЬЗУЮТ moderation.js и callbacks.js
- * ❗ КНОПКИ МОДЕРАЦИИ — В ФОРМАТЕ JSON, КАК ЖДЁТ callbacks.js
  */
 export async function submitDraftToModeration(
-  { telegram, ADMIN_CHAT_ID },
+  { telegram, ADMIN_CHAT_ID, CHANNEL_ID, BOT_USERNAME },
   { user, draft, intent }
 ) {
   const header =
@@ -115,7 +113,7 @@ export async function submitDraftToModeration(
     body ? header.length + 2 : 0
   );
 
-  // callbacks.js парсит JSON и ждёт data.t === "publish" / "reject"
+  // Превью в админке
   const preview = await telegram.sendMessage(
     ADMIN_CHAT_ID,
     combined,
@@ -132,11 +130,43 @@ export async function submitDraftToModeration(
     }
   );
 
-  if (preview) {
-    pendingSubmissions.set(preview.message_id, {
-      authorId: user.id,
-      intent,
-      items
-    });
-  }
+  if (!preview) return;
+
+  pendingSubmissions.set(preview.message_id, {
+    authorId: user.id,
+    intent,
+    items
+  });
+}
+
+/* =====================================================
+ * 📢 ПУБЛИКАЦИЯ В КАНАЛ (БЕЗ copyMessage!)
+ * ===================================================== */
+
+export async function publishToChannel(
+  { telegram, CHANNEL_ID, BOT_USERNAME },
+  { text }
+) {
+  // сначала публикуем БЕЗ ссылки
+  const sent = await telegram.sendMessage(
+    CHANNEL_ID,
+    text,
+    { parse_mode: "HTML", disable_web_page_preview: true }
+  );
+
+  const channelMsgId = sent.message_id;
+  const anonLink = `https://t.me/${BOT_USERNAME}?start=anon_${channelMsgId}`;
+
+  // теперь редактируем, добавляя HTML-якорь
+  const finalText = `${text}\n\n<a href="${anonLink}">Ответить анонимно</a>`;
+
+  await telegram.editMessageText(
+    CHANNEL_ID,
+    channelMsgId,
+    undefined,
+    finalText,
+    { parse_mode: "HTML", disable_web_page_preview: true }
+  );
+
+  return channelMsgId;
 }
