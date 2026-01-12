@@ -6,7 +6,7 @@ import { registerCallbackHandlers } from "./handlers/callbacks.js";
 
 import { tryHandleAnonReply } from "./submit.js";
 import { pendingAnonReplies, channelToDiscussion } from "./state.js";
-import mainMenu from "./ui.js";
+import { showMenuByStatus } from "./ui.js";
 
 export function createBot(env) {
   const bot = new Telegraf(env.BOT_TOKEN);
@@ -17,7 +17,7 @@ export function createBot(env) {
   bot.start(async (ctx) => {
     const payload = ctx.startPayload;
 
-    // 🔹 СЦЕНАРИЙ: анонимный комментарий
+    // 🔹 Анонимный комментарий по диплинку
     if (payload && payload.startsWith("anon_")) {
       const channelMsgId = Number(payload.replace("anon_", ""));
       if (channelMsgId) {
@@ -33,17 +33,12 @@ export function createBot(env) {
       }
     }
 
-    // 🔹 СЦЕНАРИЙ: обычный вход (СТАРАЯ ЛОГИКА)
-    await ctx.reply(
-      "Привет! 👋\n\n" +
-        "Здесь ты можешь предложить тему или задать вопрос.",
-      mainMenu()
-    );
+    // 🔹 Обычный старт — СТАРАЯ ЛОГИКА БОТА
+    await showMenuByStatus(ctx, env.CHANNEL_ID);
   });
 
   /* =========================================
-     ЛОВИМ СООБЩЕНИЯ ИЗ DISCUSSION GROUP
-     И СОХРАНЯЕМ СВЯЗЬ КАНАЛ → ДИСКУССИЯ
+     СВЯЗЬ КАНАЛ → DISCUSSION GROUP
      ========================================= */
   bot.on("message", async (ctx, next) => {
     const msg = ctx.message;
