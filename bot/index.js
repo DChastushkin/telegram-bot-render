@@ -6,7 +6,7 @@ import { registerCallbackHandlers } from "./handlers/callbacks.js";
 
 import { tryHandleAnonReply } from "./submit.js";
 import { pendingAnonReplies, channelToDiscussion } from "./state.js";
-import { mainMenu } from "./ui.js";
+import mainMenu from "./ui.js";
 
 export function createBot(env) {
   const bot = new Telegraf(env.BOT_TOKEN);
