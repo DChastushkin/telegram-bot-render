@@ -6,16 +6,18 @@ import { registerCallbackHandlers } from "./handlers/callbacks.js";
 
 import { tryHandleAnonReply } from "./submit.js";
 import { pendingAnonReplies, channelToDiscussion } from "./state.js";
+import { mainMenu } from "./ui.js";
 
 export function createBot(env) {
   const bot = new Telegraf(env.BOT_TOKEN);
 
   /* ===============================
-     ОБРАБОТКА ДИПЛИНКА anon_<id>
+     /start — МАРШРУТИЗАТОР
      =============================== */
   bot.start(async (ctx) => {
     const payload = ctx.startPayload;
 
+    // 🔹 СЦЕНАРИЙ: анонимный комментарий
     if (payload && payload.startsWith("anon_")) {
       const channelMsgId = Number(payload.replace("anon_", ""));
       if (channelMsgId) {
@@ -31,7 +33,12 @@ export function createBot(env) {
       }
     }
 
-    await ctx.reply("Привет! Я бот канала.");
+    // 🔹 СЦЕНАРИЙ: обычный вход (СТАРАЯ ЛОГИКА)
+    await ctx.reply(
+      "Привет! 👋\n\n" +
+        "Здесь ты можешь предложить тему или задать вопрос.",
+      mainMenu()
+    );
   });
 
   /* =========================================
@@ -41,23 +48,20 @@ export function createBot(env) {
   bot.on("message", async (ctx, next) => {
     const msg = ctx.message;
 
-    // интересуют только сообщения в группе
-    if (
-      msg.chat?.type === "group" ||
-      msg.chat?.type === "supergroup"
-    ) {
-      // это сообщение-ответ на пост канала
+    if (msg.chat?.type === "group" || msg.chat?.type === "supergroup") {
       if (
         msg.reply_to_message &&
         msg.reply_to_message.forward_from_chat &&
         msg.reply_to_message.forward_from_chat.id === Number(env.CHANNEL_ID)
       ) {
-        const channelMsgId = msg.reply_to_message.forward_from_message_id;
+        const channelMsgId =
+          msg.reply_to_message.forward_from_message_id;
 
         if (channelMsgId) {
           channelToDiscussion.set(channelMsgId, {
             discussionChatId: msg.chat.id,
-            discussionMsgId: msg.message_thread_id ?? msg.message_id,
+            discussionMsgId:
+              msg.message_thread_id ?? msg.message_id,
           });
         }
       }
