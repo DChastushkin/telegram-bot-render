@@ -10,6 +10,24 @@ import {
 import { submitDraftToModeration } from "../submit.js";
 import { choiceKeyboard } from "../ui.js";
 
+/**
+ * Безопасное редактирование callback-сообщения.
+ * Если message отсутствует — ничего не ломаем.
+ */
+async function safeEditMessageText(ctx, text, extra) {
+  if (ctx.callbackQuery?.message) {
+    return ctx.editMessageText(text, extra);
+  }
+  return ctx.answerCbQuery();
+}
+
+async function safeClearReplyMarkup(ctx) {
+  if (ctx.callbackQuery?.message) {
+    return ctx.editMessageReplyMarkup();
+  }
+  return ctx.answerCbQuery();
+}
+
 export function registerCallbackHandlers(bot, env) {
   bot.on("callback_query", async (ctx) => {
     try {
@@ -39,7 +57,6 @@ export function registerCallbackHandlers(bot, env) {
 
         const intent = data.v; // "advice" | "express"
 
-        // отправляем на модерацию
         await submitDraftToModeration(
           {
             telegram: ctx.telegram,
@@ -54,12 +71,11 @@ export function registerCallbackHandlers(bot, env) {
           }
         );
 
-        // чистим состояние
         pendingDrafts.delete(userId);
         awaitingIntent.delete(userId);
 
-        // подтверждение пользователю
-        await ctx.editMessageText(
+        await safeEditMessageText(
+          ctx,
           "✅ Тема отправлена на модерацию.\nМы уведомим вас после проверки."
         );
         return;
@@ -76,11 +92,10 @@ export function registerCallbackHandlers(bot, env) {
           return;
         }
 
-        // помечаем, что ждём выбор типа (значение тут не важно — важно .has)
         awaitingIntent.set(userId, "pending");
 
-        // показываем выбор
-        await ctx.editMessageText(
+        await safeEditMessageText(
+          ctx,
           "Выберите, что это:\n\n🧭 Нужен совет\n💬 Хочу высказаться",
           choiceKeyboard()
         );
@@ -93,7 +108,7 @@ export function registerCallbackHandlers(bot, env) {
       if (type === "compose_cancel") {
         pendingDrafts.delete(userId);
         awaitingIntent.delete(userId);
-        await ctx.editMessageText("❌ Отменено.");
+        await safeEditMessageText(ctx, "❌ Отменено.");
         return;
       }
 
@@ -101,25 +116,26 @@ export function registerCallbackHandlers(bot, env) {
       // ПУБЛИКАЦИЯ (АДМИН)
       // =========================
       if (type === "publish") {
-        const submission = pendingSubmissions.get(
-          ctx.callbackQuery.message.message_id
-        );
+        const msg = ctx.callbackQuery.message;
+        if (!msg) {
+          await ctx.answerCbQuery("Сообщение устарело");
+          return;
+        }
 
+        const submission = pendingSubmissions.get(msg.message_id);
         if (!submission) {
           await ctx.answerCbQuery("Черновик не найден");
           return;
         }
 
-        const originalText = ctx.callbackQuery.message.text;
+        const originalText = msg.text;
 
-        // Публикуем в канал как текст (чтобы HTML-якорь не показывал URL)
         const posted = await ctx.telegram.sendMessage(
           env.CHANNEL_ID,
           originalText,
           { parse_mode: "HTML", disable_web_page_preview: true }
         );
 
-        // (оставляем как было у тебя — если работает, не трогаем)
         if (posted.message_thread_id) {
           channelToDiscussion.set(posted.message_id, {
             discussionChatId: env.CHANNEL_ID,
@@ -150,9 +166,9 @@ export function registerCallbackHandlers(bot, env) {
           `✅ Ваша тема опубликована!\n\n🔗 ${postLink}`
         );
 
-        pendingSubmissions.delete(ctx.callbackQuery.message.message_id);
+        pendingSubmissions.delete(msg.message_id);
 
-        await ctx.telegram.editMessageReplyMarkup();
+        await safeClearReplyMarkup(ctx);
         await ctx.answerCbQuery("Опубликовано");
         return;
       }
@@ -161,26 +177,26 @@ export function registerCallbackHandlers(bot, env) {
       // ОТКЛОНЕНИЕ
       // =========================
       if (type === "reject") {
-        const submission = pendingSubmissions.get(
-          ctx.callbackQuery.message.message_id
-        );
+        const msg = ctx.callbackQuery.message;
+        if (!msg) {
+          await ctx.answerCbQuery("Сообщение устарело");
+          return;
+        }
 
+        const submission = pendingSubmissions.get(msg.message_id);
         if (submission) {
-          // Сохраняем, что ждём причину (для фолбэка по adminId)
-          pendingRejections.set(ctx.callbackQuery.message.message_id, submission);
+          pendingRejections.set(msg.message_id, submission);
           pendingRejectionsByAdmin.set(userId, submission);
 
-          // ✅ ВАЖНО: просьбу о причине пишем ТОЛЬКО в админ-чат (там где нажали "Отклонить")
           const prompt = await ctx.telegram.sendMessage(
-            ctx.callbackQuery.message.chat.id,
+            msg.chat.id,
             "✏️ Напишите причину отклонения ответом на это сообщение.",
             {
-              reply_to_message_id: ctx.callbackQuery.message.message_id,
+              reply_to_message_id: msg.message_id,
               reply_markup: { force_reply: true },
             }
           );
 
-          // На случай, если Telegram-клиент ответит именно на этот prompt — тоже сохраняем.
           if (prompt?.message_id) {
             pendingRejections.set(prompt.message_id, submission);
           }
