@@ -8,6 +8,7 @@ import {
 } from "../state.js";
 
 import { submitDraftToModeration } from "../submit.js";
+import { choiceKeyboard } from "../ui.js";
 
 export function registerCallbackHandlers(bot, env) {
   bot.on("callback_query", async (ctx) => {
@@ -26,36 +27,26 @@ export function registerCallbackHandlers(bot, env) {
       const userId = ctx.from.id;
 
       // =========================
-      // ВЫБОР ТИПА ТЕМЫ
+      // ВЫБОР ТИПА (после "Готово")
       // =========================
       if (type === "choose") {
-        // ✅ FIX: Map, а не объект
-        awaitingIntent.set(userId, data.v); // "advice" | "express"
-
-        pendingDrafts.set(userId, { items: [] });
-
-        await ctx.editMessageText(
-          "✏️ Напишите тему. Можно отправить несколько сообщений.\nКогда закончите — нажмите «Готово»."
-        );
-        return;
-      }
-
-      // =========================
-      // ГОТОВО → МОДЕРАЦИЯ
-      // =========================
-      if (type === "compose_done") {
         const draft = pendingDrafts.get(userId);
 
-        if (!draft || !draft.items.length) {
-          await ctx.answerCbQuery("Черновик пуст");
+        if (!draft || !draft.items?.length) {
+          await ctx.answerCbQuery("Черновик не найден");
           return;
         }
 
-        // ✅ FIX: Map
-        const intent = awaitingIntent.get(userId);
+        const intent = data.v; // "advice" | "express"
 
+        // отправляем на модерацию
         await submitDraftToModeration(
-          { telegram: ctx.telegram, ADMIN_CHAT_ID: env.ADMIN_CHAT_ID },
+          {
+            telegram: ctx.telegram,
+            ADMIN_CHAT_ID: env.ADMIN_CHAT_ID,
+            CHANNEL_ID: env.CHANNEL_ID,
+            BOT_USERNAME: env.BOT_USERNAME,
+          },
           {
             user: ctx.from,
             draft,
@@ -63,12 +54,46 @@ export function registerCallbackHandlers(bot, env) {
           }
         );
 
+        // чистим состояние
         pendingDrafts.delete(userId);
-        awaitingIntent.delete(userId); // ✅ FIX
+        awaitingIntent.delete(userId);
 
+        // подтверждение пользователю
         await ctx.editMessageText(
           "✅ Тема отправлена на модерацию.\nМы уведомим вас после проверки."
         );
+        return;
+      }
+
+      // =========================
+      // ГОТОВО → ПОКАЗАТЬ ВЫБОР
+      // =========================
+      if (type === "compose_done") {
+        const draft = pendingDrafts.get(userId);
+
+        if (!draft || !draft.items?.length) {
+          await ctx.answerCbQuery("Черновик пуст");
+          return;
+        }
+
+        // помечаем, что ждём выбор типа (значение тут не важно — важно .has)
+        awaitingIntent.set(userId, "pending");
+
+        // показываем выбор
+        await ctx.editMessageText(
+          "Выберите, что это:\n\n🧭 Нужен совет\n💬 Хочу высказаться",
+          choiceKeyboard()
+        );
+        return;
+      }
+
+      // =========================
+      // ОТМЕНА (если используете)
+      // =========================
+      if (type === "compose_cancel") {
+        pendingDrafts.delete(userId);
+        awaitingIntent.delete(userId);
+        await ctx.editMessageText("❌ Отменено.");
         return;
       }
 
@@ -87,12 +112,14 @@ export function registerCallbackHandlers(bot, env) {
 
         const originalText = ctx.callbackQuery.message.text;
 
+        // Публикуем в канал как текст (чтобы HTML-якорь не показывал URL)
         const posted = await ctx.telegram.sendMessage(
           env.CHANNEL_ID,
           originalText,
           { parse_mode: "HTML", disable_web_page_preview: true }
         );
 
+        // (оставляем как было у тебя — если работает, не трогаем)
         if (posted.message_thread_id) {
           channelToDiscussion.set(posted.message_id, {
             discussionChatId: env.CHANNEL_ID,
@@ -149,6 +176,7 @@ export function registerCallbackHandlers(bot, env) {
         }
 
         await ctx.answerCbQuery("Введите причину");
+        return;
       }
     } catch (e) {
       console.error("Callback error:", e);
