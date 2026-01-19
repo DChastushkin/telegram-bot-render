@@ -23,15 +23,16 @@ export function registerCallbackHandlers(bot, env) {
       }
 
       const type = data.t;
+      const userId = ctx.from.id;
 
       // =========================
-      // ВЫБОР ТИПА ТЕМЫ  ✅ FIX
+      // ВЫБОР ТИПА ТЕМЫ ✅ FIX
       // =========================
       if (type === "choose") {
-        // 🔧 ВОТ КЛЮЧЕВАЯ ПРАВКА
-        awaitingIntent.set(ctx.from.id, data.v); // "advice" | "express"
+        // 🔧 awaitingIntent — ОБЪЕКТ, а не Map
+        awaitingIntent[userId] = data.v; // "advice" | "express"
 
-        pendingDrafts.set(ctx.from.id, { items: [] });
+        pendingDrafts.set(userId, { items: [] });
 
         await ctx.editMessageText(
           "✏️ Напишите тему. Можно отправить несколько сообщений.\nКогда закончите — нажмите «Готово»."
@@ -43,24 +44,26 @@ export function registerCallbackHandlers(bot, env) {
       // ГОТОВО → МОДЕРАЦИЯ
       // =========================
       if (type === "compose_done") {
-        const draft = pendingDrafts.get(ctx.from.id);
+        const draft = pendingDrafts.get(userId);
 
         if (!draft || !draft.items.length) {
           await ctx.answerCbQuery("Черновик пуст");
           return;
         }
 
+        const intent = awaitingIntent[userId];
+
         await submitDraftToModeration(
           { telegram: ctx.telegram, ADMIN_CHAT_ID: env.ADMIN_CHAT_ID },
           {
             user: ctx.from,
             draft,
-            intent: awaitingIntent.get(ctx.from.id), // ← intent теперь ЕСТЬ
+            intent, // теперь корректно читается
           }
         );
 
-        pendingDrafts.delete(ctx.from.id);
-        awaitingIntent.delete(ctx.from.id);
+        pendingDrafts.delete(userId);
+        delete awaitingIntent[userId];
 
         await ctx.editMessageText(
           "✅ Тема отправлена на модерацию.\nМы уведомим вас после проверки."
@@ -136,10 +139,10 @@ export function registerCallbackHandlers(bot, env) {
 
         if (submission) {
           pendingRejections.set(ctx.callbackQuery.message.message_id, submission);
-          pendingRejectionsByAdmin.set(ctx.from.id, submission);
+          pendingRejectionsByAdmin.set(userId, submission);
 
           await ctx.telegram.sendMessage(
-            ctx.from.id,
+            userId,
             "✏️ Напишите причину отклонения."
           );
         }
