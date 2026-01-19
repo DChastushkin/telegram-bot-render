@@ -25,10 +25,12 @@ export function registerCallbackHandlers(bot, env) {
       const type = data.t;
 
       // =========================
-      // ВЫБОР ТИПА ТЕМЫ
+      // ВЫБОР ТИПА ТЕМЫ  ✅ FIX
       // =========================
       if (type === "choose") {
-        awaitingIntent.delete(ctx.from.id);
+        // 🔧 ВОТ КЛЮЧЕВАЯ ПРАВКА
+        awaitingIntent.set(ctx.from.id, data.v); // "advice" | "express"
+
         pendingDrafts.set(ctx.from.id, { items: [] });
 
         await ctx.editMessageText(
@@ -53,10 +55,12 @@ export function registerCallbackHandlers(bot, env) {
           {
             user: ctx.from,
             draft,
+            intent: awaitingIntent.get(ctx.from.id), // ← intent теперь ЕСТЬ
           }
         );
 
         pendingDrafts.delete(ctx.from.id);
+        awaitingIntent.delete(ctx.from.id);
 
         await ctx.editMessageText(
           "✅ Тема отправлена на модерацию.\nМы уведомим вас после проверки."
@@ -79,14 +83,12 @@ export function registerCallbackHandlers(bot, env) {
 
         const originalText = ctx.callbackQuery.message.text;
 
-        // ПУБЛИКУЕМ В КАНАЛ ЧЕРЕЗ sendMessage (НЕ copyMessage!)
         const posted = await ctx.telegram.sendMessage(
           env.CHANNEL_ID,
           originalText,
           { parse_mode: "HTML", disable_web_page_preview: true }
         );
 
-        // сохраняем связку канал → обсуждение
         if (posted.message_thread_id) {
           channelToDiscussion.set(posted.message_id, {
             discussionChatId: env.CHANNEL_ID,
@@ -94,7 +96,6 @@ export function registerCallbackHandlers(bot, env) {
           });
         }
 
-        // формируем ссылки
         const internalId = String(env.CHANNEL_ID).startsWith("-100")
           ? String(env.CHANNEL_ID).slice(4)
           : String(Math.abs(env.CHANNEL_ID));
@@ -102,8 +103,8 @@ export function registerCallbackHandlers(bot, env) {
         const postLink = `https://t.me/c/${internalId}/${posted.message_id}`;
         const anonLink = `https://t.me/${env.BOT_USERNAME}?start=anon_${posted.message_id}`;
 
-        // ДОБАВЛЯЕМ HTML-ЯКОРЬ "Ответить анонимно"
-        const finalText = `${originalText}\n\n<a href="${anonLink}">💬 Ответить анонимно</a>`;
+        const finalText =
+          `${originalText}\n\n<a href="${anonLink}">💬 Ответить анонимно</a>`;
 
         await ctx.telegram.editMessageText(
           env.CHANNEL_ID,
@@ -113,7 +114,6 @@ export function registerCallbackHandlers(bot, env) {
           { parse_mode: "HTML", disable_web_page_preview: true }
         );
 
-        // уведомляем автора
         await ctx.telegram.sendMessage(
           submission.authorId,
           `✅ Ваша тема опубликована!\n\n🔗 ${postLink}`
