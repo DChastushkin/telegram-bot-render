@@ -34,7 +34,7 @@ export const pendingRejectionsByAdmin = new Map();
 
 // userId -> true
 // Ожидание выбора типа обращения (нужен совет / хочу высказаться)
-export const awaitingIntent = new Set();
+export const awaitingIntent = new Map();
 
 
 // =======================
