@@ -88,7 +88,7 @@ export function registerCallbackHandlers(bot, env) {
       }
 
       // =========================
-      // ОТМЕНА (если используете)
+      // ОТМЕНА
       // =========================
       if (type === "compose_cancel") {
         pendingDrafts.delete(userId);
@@ -166,13 +166,24 @@ export function registerCallbackHandlers(bot, env) {
         );
 
         if (submission) {
+          // Сохраняем, что ждём причину (для фолбэка по adminId)
           pendingRejections.set(ctx.callbackQuery.message.message_id, submission);
           pendingRejectionsByAdmin.set(userId, submission);
 
-          await ctx.telegram.sendMessage(
-            userId,
-            "✏️ Напишите причину отклонения."
+          // ✅ ВАЖНО: просьбу о причине пишем ТОЛЬКО в админ-чат (там где нажали "Отклонить")
+          const prompt = await ctx.telegram.sendMessage(
+            ctx.callbackQuery.message.chat.id,
+            "✏️ Напишите причину отклонения ответом на это сообщение.",
+            {
+              reply_to_message_id: ctx.callbackQuery.message.message_id,
+              reply_markup: { force_reply: true },
+            }
           );
+
+          // На случай, если Telegram-клиент ответит именно на этот prompt — тоже сохраняем.
+          if (prompt?.message_id) {
+            pendingRejections.set(prompt.message_id, submission);
+          }
         }
 
         await ctx.answerCbQuery("Введите причину");
