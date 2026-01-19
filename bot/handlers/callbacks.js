@@ -26,11 +26,11 @@ export function registerCallbackHandlers(bot, env) {
       const userId = ctx.from.id;
 
       // =========================
-      // ВЫБОР ТИПА ТЕМЫ ✅ FIX
+      // ВЫБОР ТИПА ТЕМЫ
       // =========================
       if (type === "choose") {
-        // 🔧 awaitingIntent — ОБЪЕКТ, а не Map
-        awaitingIntent[userId] = data.v; // "advice" | "express"
+        // ✅ FIX: Map, а не объект
+        awaitingIntent.set(userId, data.v); // "advice" | "express"
 
         pendingDrafts.set(userId, { items: [] });
 
@@ -51,19 +51,20 @@ export function registerCallbackHandlers(bot, env) {
           return;
         }
 
-        const intent = awaitingIntent[userId];
+        // ✅ FIX: Map
+        const intent = awaitingIntent.get(userId);
 
         await submitDraftToModeration(
           { telegram: ctx.telegram, ADMIN_CHAT_ID: env.ADMIN_CHAT_ID },
           {
             user: ctx.from,
             draft,
-            intent, // теперь корректно читается
+            intent,
           }
         );
 
         pendingDrafts.delete(userId);
-        delete awaitingIntent[userId];
+        awaitingIntent.delete(userId); // ✅ FIX
 
         await ctx.editMessageText(
           "✅ Тема отправлена на модерацию.\nМы уведомим вас после проверки."
@@ -124,7 +125,7 @@ export function registerCallbackHandlers(bot, env) {
 
         pendingSubmissions.delete(ctx.callbackQuery.message.message_id);
 
-        await ctx.editMessageReplyMarkup();
+        await ctx.telegram.editMessageReplyMarkup();
         await ctx.answerCbQuery("Опубликовано");
         return;
       }
