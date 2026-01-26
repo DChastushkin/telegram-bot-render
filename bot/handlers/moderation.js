@@ -4,8 +4,10 @@ import {
   composeKeyboard,
   showNonMemberHint
 } from "../ui.js";
+
 import { isMember, handleRejectionReason } from "../utils.js";
 import { submitDraftToModeration } from "../submit.js";
+
 import {
   awaitingTopic,
   pendingDrafts,
@@ -56,27 +58,49 @@ export function registerModerationHandlers(bot, env) {
 
   bot.on("message", async (ctx, next) => {
     try {
+      const uid = ctx.from.id;
+      const msg = ctx.message;
+
+      // ====== ЛОГ: входящее сообщение ======
+      console.log("[MODERATION][INCOMING]", {
+        uid,
+        chatId: ctx.chat.id,
+        messageId: msg.message_id,
+        hasText: !!msg.text,
+        hasPhoto: !!msg.photo,
+        hasVideo: !!msg.video,
+        hasDocument: !!msg.document,
+        caption: msg.caption,
+        meta: detectContentMeta(msg)
+      });
+
       // ответы админа при отклонении
       if (String(ctx.chat?.id) === String(ADMIN_CHAT_ID)) {
-        const replyTo = ctx.message?.reply_to_message;
+        const replyTo = msg?.reply_to_message;
         if (replyTo) {
           const entry = pendingRejections.get(replyTo.message_id);
           if (entry) {
+            console.log("[MODERATION][ADMIN][REJECTION_REPLY]", replyTo.message_id);
             await handleRejectionReason(ctx, entry, { ADMIN_CHAT_ID });
             return;
           }
         }
-        const planB = pendingRejectionsByAdmin.get(ctx.from.id);
+        const planB = pendingRejectionsByAdmin.get(uid);
         if (planB) {
+          console.log("[MODERATION][ADMIN][REJECTION_PLAN_B]", uid);
           await handleRejectionReason(ctx, planB, { ADMIN_CHAT_ID });
           return;
         }
       }
 
-      const uid = ctx.from.id;
-
-      // начало создания темы
+      // ====== НАЧАЛО СОЗДАНИЯ ТЕМЫ ======
       if (awaitingTopic.has(uid)) {
+        console.log("[MODERATION][START_TOPIC]", {
+          uid,
+          messageId: msg.message_id,
+          meta: detectContentMeta(msg)
+        });
+
         if (!(await isMember(ctx, CHANNEL_ID))) {
           awaitingTopic.delete(uid);
           await showNonMemberHint(ctx);
@@ -86,7 +110,15 @@ export function registerModerationHandlers(bot, env) {
         awaitingTopic.delete(uid);
 
         pendingDrafts.set(uid, {
-          items: [{ srcChatId: ctx.chat.id, srcMsgId: ctx.message.message_id }]
+          items: [{
+            srcChatId: ctx.chat.id,
+            srcMsgId: msg.message_id
+          }]
+        });
+
+        console.log("[MODERATION][DRAFT_CREATED]", {
+          uid,
+          items: pendingDrafts.get(uid).items
         });
 
         await ctx.reply(
@@ -96,23 +128,52 @@ export function registerModerationHandlers(bot, env) {
         return;
       }
 
-      // добавление сообщений в draft
+      // ====== ДОБАВЛЕНИЕ В DRAFT ======
       if (pendingDrafts.has(uid) && !awaitingIntent.has(uid)) {
         const session = pendingDrafts.get(uid);
+
+        console.log("[MODERATION][DRAFT_PUSH_BEFORE]", {
+          uid,
+          items: session.items
+        });
+
         session.items.push({
           srcChatId: ctx.chat.id,
-          srcMsgId: ctx.message.message_id
+          srcMsgId: msg.message_id
         });
-        await ctx.reply("Добавлено. Нажмите «✅ Готово», когда закончите.", composeKeyboard());
+
+        console.log("[MODERATION][DRAFT_PUSH_AFTER]", {
+          uid,
+          added: {
+            srcChatId: ctx.chat.id,
+            srcMsgId: msg.message_id,
+            meta: detectContentMeta(msg)
+          },
+          items: session.items
+        });
+
+        await ctx.reply(
+          "Добавлено. Нажмите «✅ Готово», когда закончите.",
+          composeKeyboard()
+        );
         return;
       }
 
-      // выбор типа публикации
-      if (pendingDrafts.has(uid) && awaitingIntent.has(uid) && "text" in ctx.message) {
-        const t = (ctx.message.text || "").trim();
+      // ====== ВЫБОР ТИПА ПУБЛИКАЦИИ ======
+      if (pendingDrafts.has(uid) && awaitingIntent.has(uid) && "text" in msg) {
+        const t = (msg.text || "").trim();
+
+        console.log("[MODERATION][INTENT_INPUT]", { uid, value: t });
+
         if (t === "1" || t === "2") {
           const session = pendingDrafts.get(uid);
           const intent = t === "1" ? "advice" : "express";
+
+          console.log("[MODERATION][SUBMIT]", {
+            uid,
+            intent,
+            items: session.items
+          });
 
           const result = await submitDraftToModeration(
             { telegram: ctx.telegram, ADMIN_CHAT_ID },
@@ -120,7 +181,8 @@ export function registerModerationHandlers(bot, env) {
           );
 
           if (result?.channelMessageId) {
-            const channelLink = `https://t.me/c/${String(CHANNEL_ID).replace("-100", "")}/${result.channelMessageId}`;
+            const channelLink =
+              `https://t.me/c/${String(CHANNEL_ID).replace("-100", "")}/${result.channelMessageId}`;
             await ctx.reply(`✅ Тема опубликована:\n${channelLink}`, memberMenu());
           } else {
             await ctx.reply("✅ Тема опубликована.", memberMenu());
@@ -137,7 +199,7 @@ export function registerModerationHandlers(bot, env) {
 
       return next();
     } catch (e) {
-      console.error("moderation error:", e);
+      console.error("[MODERATION][ERROR]", e);
       return next();
     }
   });
