@@ -101,16 +101,13 @@ export async function submitDraftToModeration(
 
   const infoMsg = await telegram.sendMessage(ADMIN_CHAT_ID, info);
 
-  const items = Array.isArray(draft.items) ? draft.items : [];
+  const items = draft.items || [];
 
-  /* =====================================================
-   * 🔴 КЛЮЧЕВОЙ ФИКС:
-   * КОПИРУЕМ ВСЕ ИСХОДНЫЕ СООБЩЕНИЯ (включая фото без текста)
-   * ===================================================== */
-  if (infoMsg?.message_id && items.length > 0) {
+  // ✅ FIX: отправляем в админ-чат все исходные сообщения (включая медиа).
+  // В draft.items медиа хранится как { srcChatId, srcMsgId }.
+  if (infoMsg?.message_id && items.length) {
     for (const it of items) {
       if (!it?.srcChatId || !it?.srcMsgId) continue;
-
       try {
         await telegram.copyMessage(
           ADMIN_CHAT_ID,
@@ -124,7 +121,6 @@ export async function submitDraftToModeration(
     }
   }
 
-  // Текст собираем ОТДЕЛЬНО, он больше не влияет на медиа
   const textSegments = items
     .map(it => ({ text: it.text || "", entities: it.entities || [] }))
     .filter(s => s.text && s.text.trim().length > 0);
@@ -136,13 +132,12 @@ export async function submitDraftToModeration(
     body ? header.length + 2 : 0
   );
 
-  // Превью в админке + кнопки
+  // Превью в админке
   const preview = await telegram.sendMessage(
     ADMIN_CHAT_ID,
     combined,
     {
       entities: finalEntities,
-      reply_to_message_id: infoMsg?.message_id,
       reply_markup: {
         inline_keyboard: [
           [
@@ -164,13 +159,14 @@ export async function submitDraftToModeration(
 }
 
 /* =====================================================
- * 📢 ПУБЛИКАЦИЯ В КАНАЛ
+ * 📢 ПУБЛИКАЦИЯ В КАНАЛ (БЕЗ copyMessage!)
  * ===================================================== */
 
 export async function publishToChannel(
   { telegram, CHANNEL_ID, BOT_USERNAME },
   { text }
 ) {
+  // сначала публикуем БЕЗ ссылки
   const sent = await telegram.sendMessage(
     CHANNEL_ID,
     text,
@@ -180,6 +176,7 @@ export async function publishToChannel(
   const channelMsgId = sent.message_id;
   const anonLink = `https://t.me/${BOT_USERNAME}?start=anon_${channelMsgId}`;
 
+  // теперь редактируем, добавляя HTML-якорь
   const finalText = `${text}\n\n<a href="${anonLink}">Ответить анонимно</a>`;
 
   await telegram.editMessageText(

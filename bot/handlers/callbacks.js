@@ -110,55 +110,48 @@ export function registerCallbackHandlers(bot, env) {
           return;
         }
 
+        const originalText = ctx.callbackQuery.message.text;
         const items = Array.isArray(submission.items) ? submission.items : [];
-        let posted = null;
 
-        // ✅ Публикуем исходные сообщения (включая медиа) через copyMessage.
-        // Это решает баг: у админа раньше приходило уведомление без картинки,
-        // а в канал всё уходило только как текст.
+        // ✅ Публикуем в канал: если есть исходные сообщения (включая медиа) — копируем их.
+        let firstPosted = null;
+        let lastMsgId = null;
+
         if (items.length) {
           for (const it of items) {
-            // основной кейс: в items лежит ссылка на исходное сообщение пользователя
-            if (it?.srcChatId && it?.srcMsgId) {
-              const extra = posted?.message_id
-                ? { reply_to_message_id: posted.message_id }
-                : undefined;
-
+            if (!it?.srcChatId || !it?.srcMsgId) continue;
+            try {
               const msg = await ctx.telegram.copyMessage(
                 env.CHANNEL_ID,
                 it.srcChatId,
                 it.srcMsgId,
-                extra
+                lastMsgId ? { reply_to_message_id: lastMsgId } : {}
               );
-
-              if (!posted && msg) posted = msg;
-              continue;
-            }
-
-            // фолбэк: если item старого формата (только text)
-            if (it?.text && typeof it.text === "string") {
-              const msg = await ctx.telegram.sendMessage(
-                env.CHANNEL_ID,
-                it.text,
-                {
-                  parse_mode: "HTML",
-                  disable_web_page_preview: true,
-                  ...(posted?.message_id
-                    ? { reply_to_message_id: posted.message_id }
-                    : {}),
-                }
-              );
-              if (!posted && msg) posted = msg;
+              if (msg?.message_id) {
+                if (!firstPosted) firstPosted = msg;
+                lastMsgId = msg.message_id;
+              }
+            } catch (e) {
+              console.error("copyMessage to channel failed:", e);
             }
           }
         }
 
-        // фолбэк: если вдруг не удалось собрать публикацию из items
-        if (!posted) {
-          const originalText = ctx.callbackQuery.message.text || "";
-          posted = await ctx.telegram.sendMessage(env.CHANNEL_ID, originalText, {
-            parse_mode: "HTML",
-            disable_web_page_preview: true,
+        // Фолбэк: если копировать нечего/не получилось — публикуем текстом как раньше.
+        if (!firstPosted) {
+          firstPosted = await ctx.telegram.sendMessage(
+            env.CHANNEL_ID,
+            originalText,
+            { parse_mode: "HTML", disable_web_page_preview: true }
+          );
+          lastMsgId = firstPosted.message_id;
+        }
+
+        // (оставляем как было у тебя — если работает, не трогаем)
+        if (firstPosted.message_thread_id) {
+          channelToDiscussion.set(firstPosted.message_id, {
+            discussionChatId: env.CHANNEL_ID,
+            discussionMsgId: firstPosted.message_thread_id,
           });
         }
 
@@ -166,42 +159,18 @@ export function registerCallbackHandlers(bot, env) {
           ? String(env.CHANNEL_ID).slice(4)
           : String(Math.abs(env.CHANNEL_ID));
 
-        const postLink = `https://t.me/c/${internalId}/${posted.message_id}`;
-        const anonLink = `https://t.me/${env.BOT_USERNAME}?start=anon_${posted.message_id}`;
+        const postLink = `https://t.me/c/${internalId}/${firstPosted.message_id}`;
+        const anonLink = `https://t.me/${env.BOT_USERNAME}?start=anon_${firstPosted.message_id}`;
 
-        // ✅ Добавляем ссылку "Ответить анонимно".
-        // Для текстовых постов — редактируем текст, для медиа — редактируем caption,
-        // иначе отправляем отдельным сообщением-реплаем.
-        const linkLine = `<a href="${anonLink}">💬 Ответить анонимно</a>`;
+        // ✅ Ссылка на анонимный ответ. Для медиа-поста безопаснее отправить отдельным сообщением-реплаем.
         try {
-          if (posted?.text) {
-            const finalText = `${posted.text}\n\n${linkLine}`;
-            await ctx.telegram.editMessageText(
-              env.CHANNEL_ID,
-              posted.message_id,
-              undefined,
-              finalText,
-              { parse_mode: "HTML", disable_web_page_preview: true }
-            );
-          } else if (Object.prototype.hasOwnProperty.call(posted || {}, "caption")) {
-            const base = posted.caption || "";
-            const finalCaption = base ? `${base}\n\n${linkLine}` : linkLine;
-            await ctx.telegram.editMessageCaption(
-              env.CHANNEL_ID,
-              posted.message_id,
-              undefined,
-              finalCaption,
-              { parse_mode: "HTML" }
-            );
-          } else {
-            await ctx.telegram.sendMessage(env.CHANNEL_ID, linkLine, {
-              parse_mode: "HTML",
-              reply_to_message_id: posted.message_id,
-              disable_web_page_preview: true,
-            });
-          }
+          await ctx.telegram.sendMessage(
+            env.CHANNEL_ID,
+            `<a href="${anonLink}">💬 Ответить анонимно</a>`,
+            { parse_mode: "HTML", disable_web_page_preview: true, reply_to_message_id: firstPosted.message_id }
+          );
         } catch (e) {
-          console.error("Failed to attach anon link:", e);
+          console.error("failed to send anon link:", e);
         }
 
         await ctx.telegram.sendMessage(
@@ -211,14 +180,20 @@ export function registerCallbackHandlers(bot, env) {
 
         pendingSubmissions.delete(ctx.callbackQuery.message.message_id);
 
-        // ✅ Косметический баг: editMessageReplyMarkup() без message_id → TelegramError 400.
-        // Убираем кнопки с того сообщения, по которому нажали.
-        await ctx.telegram.editMessageReplyMarkup(
-          ctx.callbackQuery.message.chat.id,
-          ctx.callbackQuery.message.message_id,
-          undefined,
-          { inline_keyboard: [] }
-        );
+        // ✅ Убираем кнопки с карточки модерации (фикс TelegramError 400 без message_id)
+        try {
+          if (ctx.callbackQuery?.message) {
+            await ctx.telegram.editMessageReplyMarkup(
+              ctx.callbackQuery.message.chat.id,
+              ctx.callbackQuery.message.message_id,
+              undefined,
+              { inline_keyboard: [] }
+            );
+          }
+        } catch (e) {
+          console.error("editMessageReplyMarkup failed:", e);
+        }
+
         await ctx.answerCbQuery("Опубликовано");
         return;
       }
