@@ -101,13 +101,16 @@ export async function submitDraftToModeration(
 
   const infoMsg = await telegram.sendMessage(ADMIN_CHAT_ID, info);
 
-  const items = draft.items || [];
+  const items = Array.isArray(draft.items) ? draft.items : [];
 
-  // ✅ ВАЖНО: если в черновике есть медиа/сообщения, копируем их в админ-чат.
-  // Иначе админ увидит только текст, а вложения «пропадут».
-  if (infoMsg?.message_id && items.length) {
+  /* =====================================================
+   * 🔴 КЛЮЧЕВОЙ ФИКС:
+   * КОПИРУЕМ ВСЕ ИСХОДНЫЕ СООБЩЕНИЯ (включая фото без текста)
+   * ===================================================== */
+  if (infoMsg?.message_id && items.length > 0) {
     for (const it of items) {
       if (!it?.srcChatId || !it?.srcMsgId) continue;
+
       try {
         await telegram.copyMessage(
           ADMIN_CHAT_ID,
@@ -121,6 +124,7 @@ export async function submitDraftToModeration(
     }
   }
 
+  // Текст собираем ОТДЕЛЬНО, он больше не влияет на медиа
   const textSegments = items
     .map(it => ({ text: it.text || "", entities: it.entities || [] }))
     .filter(s => s.text && s.text.trim().length > 0);
@@ -160,14 +164,13 @@ export async function submitDraftToModeration(
 }
 
 /* =====================================================
- * 📢 ПУБЛИКАЦИЯ В КАНАЛ (БЕЗ copyMessage!)
+ * 📢 ПУБЛИКАЦИЯ В КАНАЛ
  * ===================================================== */
 
 export async function publishToChannel(
   { telegram, CHANNEL_ID, BOT_USERNAME },
   { text }
 ) {
-  // сначала публикуем БЕЗ ссылки
   const sent = await telegram.sendMessage(
     CHANNEL_ID,
     text,
@@ -177,7 +180,6 @@ export async function publishToChannel(
   const channelMsgId = sent.message_id;
   const anonLink = `https://t.me/${BOT_USERNAME}?start=anon_${channelMsgId}`;
 
-  // теперь редактируем, добавляя HTML-якорь
   const finalText = `${text}\n\n<a href="${anonLink}">Ответить анонимно</a>`;
 
   await telegram.editMessageText(
