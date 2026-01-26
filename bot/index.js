@@ -10,7 +10,6 @@ import { showMenuByStatus } from "./ui.js";
 
 console.error("🔥 BOT INDEX LOADED v2026-02-01");
 
-
 export function createBot(env) {
   const bot = new Telegraf(env.BOT_TOKEN);
 
@@ -36,16 +35,29 @@ export function createBot(env) {
       }
     }
 
-    // 🔹 Обычный старт — СТАРАЯ ЛОГИКА БОТА
+    // 🔹 Обычный старт
     await showMenuByStatus(ctx, env.CHANNEL_ID);
   });
 
-  /* =========================================
-     СВЯЗЬ КАНАЛ → DISCUSSION GROUP
-     ========================================= */
+  /* =====================================================
+     ГЛАВНЫЙ MESSAGE-HANDLER (ЕДИНСТВЕННЫЙ)
+     ===================================================== */
   bot.on("message", async (ctx, next) => {
     const msg = ctx.message;
 
+    // ===== DEBUG: подтверждаем, что апдейт реально пришёл
+    console.error("📥 MESSAGE IN BOT", {
+      chatId: msg.chat?.id,
+      messageId: msg.message_id,
+      hasText: !!msg.text,
+      hasPhoto: !!msg.photo,
+      hasVideo: !!msg.video,
+      hasDocument: !!msg.document,
+    });
+
+    /* =========================================
+       СВЯЗЬ КАНАЛ → DISCUSSION GROUP
+       ========================================= */
     if (msg.chat?.type === "group" || msg.chat?.type === "supergroup") {
       if (
         msg.reply_to_message &&
@@ -65,21 +77,18 @@ export function createBot(env) {
       }
     }
 
-    return next();
-  });
-
-  /* =================================
-     АНОНИМНЫЕ КОММЕНТАРИИ
-     ================================= */
-  // FIX: раньше был bot.on("text") — медиа не доходили до moderation
-  bot.on("message", async (ctx, next) => {
-    if (ctx.message?.text) {
+    /* =================================
+       АНОНИМНЫЕ КОММЕНТАРИИ (ТОЛЬКО ТЕКСТ)
+       ================================= */
+    if (msg.text) {
       const handled = await tryHandleAnonReply(ctx);
       if (handled) return;
     }
+
     return next();
   });
 
+  /* ===== РЕГИСТРАЦИЯ ОСТАЛЬНЫХ ХЕНДЛЕРОВ ===== */
   registerAccessHandlers(bot, env);
   registerModerationHandlers(bot, env);
   registerCallbackHandlers(bot, env);
