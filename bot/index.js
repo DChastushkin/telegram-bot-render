@@ -68,9 +68,12 @@ export function createBot(env) {
   /* =================================
      АНОНИМНЫЕ КОММЕНТАРИИ
      ================================= */
-  bot.on("text", async (ctx, next) => {
-    const handled = await tryHandleAnonReply(ctx);
-    if (handled) return;
+  // FIX: раньше был bot.on("text") — медиа не доходили до moderation
+  bot.on("message", async (ctx, next) => {
+    if (ctx.message?.text) {
+      const handled = await tryHandleAnonReply(ctx);
+      if (handled) return;
+    }
     return next();
   });
 
