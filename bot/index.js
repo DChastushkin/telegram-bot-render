@@ -8,6 +8,9 @@ import { tryHandleAnonReply } from "./submit.js";
 import { pendingAnonReplies, channelToDiscussion } from "./state.js";
 import { showMenuByStatus } from "./ui.js";
 
+console.error("🔥 BOT INDEX LOADED v2026-02-01");
+
+
 export function createBot(env) {
   const bot = new Telegraf(env.BOT_TOKEN);
 
