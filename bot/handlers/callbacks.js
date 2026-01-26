@@ -10,24 +10,6 @@ import {
 import { submitDraftToModeration } from "../submit.js";
 import { choiceKeyboard } from "../ui.js";
 
-/**
- * Безопасное редактирование callback-сообщения.
- * Если message отсутствует — ничего не ломаем.
- */
-async function safeEditMessageText(ctx, text, extra) {
-  if (ctx.callbackQuery?.message) {
-    return ctx.editMessageText(text, extra);
-  }
-  return ctx.answerCbQuery();
-}
-
-async function safeClearReplyMarkup(ctx) {
-  if (ctx.callbackQuery?.message) {
-    return ctx.editMessageReplyMarkup();
-  }
-  return ctx.answerCbQuery();
-}
-
 export function registerCallbackHandlers(bot, env) {
   bot.on("callback_query", async (ctx) => {
     try {
@@ -57,6 +39,7 @@ export function registerCallbackHandlers(bot, env) {
 
         const intent = data.v; // "advice" | "express"
 
+        // отправляем на модерацию
         await submitDraftToModeration(
           {
             telegram: ctx.telegram,
@@ -71,11 +54,12 @@ export function registerCallbackHandlers(bot, env) {
           }
         );
 
+        // чистим состояние
         pendingDrafts.delete(userId);
         awaitingIntent.delete(userId);
 
-        await safeEditMessageText(
-          ctx,
+        // подтверждение пользователю
+        await ctx.editMessageText(
           "✅ Тема отправлена на модерацию.\nМы уведомим вас после проверки."
         );
         return;
@@ -92,10 +76,11 @@ export function registerCallbackHandlers(bot, env) {
           return;
         }
 
+        // помечаем, что ждём выбор типа (значение тут не важно — важно .has)
         awaitingIntent.set(userId, "pending");
 
-        await safeEditMessageText(
-          ctx,
+        // показываем выбор
+        await ctx.editMessageText(
           "Выберите, что это:\n\n🧭 Нужен совет\n💬 Хочу высказаться",
           choiceKeyboard()
         );
@@ -108,7 +93,7 @@ export function registerCallbackHandlers(bot, env) {
       if (type === "compose_cancel") {
         pendingDrafts.delete(userId);
         awaitingIntent.delete(userId);
-        await safeEditMessageText(ctx, "❌ Отменено.");
+        await ctx.editMessageText("❌ Отменено.");
         return;
       }
 
@@ -116,30 +101,64 @@ export function registerCallbackHandlers(bot, env) {
       // ПУБЛИКАЦИЯ (АДМИН)
       // =========================
       if (type === "publish") {
-        const msg = ctx.callbackQuery.message;
-        if (!msg) {
-          await ctx.answerCbQuery("Сообщение устарело");
-          return;
-        }
+        const submission = pendingSubmissions.get(
+          ctx.callbackQuery.message.message_id
+        );
 
-        const submission = pendingSubmissions.get(msg.message_id);
         if (!submission) {
           await ctx.answerCbQuery("Черновик не найден");
           return;
         }
 
-        const originalText = msg.text;
+        const items = Array.isArray(submission.items) ? submission.items : [];
+        let posted = null;
 
-        const posted = await ctx.telegram.sendMessage(
-          env.CHANNEL_ID,
-          originalText,
-          { parse_mode: "HTML", disable_web_page_preview: true }
-        );
+        // ✅ Публикуем исходные сообщения (включая медиа) через copyMessage.
+        // Это решает баг: у админа раньше приходило уведомление без картинки,
+        // а в канал всё уходило только как текст.
+        if (items.length) {
+          for (const it of items) {
+            // основной кейс: в items лежит ссылка на исходное сообщение пользователя
+            if (it?.srcChatId && it?.srcMsgId) {
+              const extra = posted?.message_id
+                ? { reply_to_message_id: posted.message_id }
+                : undefined;
 
-        if (posted.message_thread_id) {
-          channelToDiscussion.set(posted.message_id, {
-            discussionChatId: env.CHANNEL_ID,
-            discussionMsgId: posted.message_thread_id,
+              const msg = await ctx.telegram.copyMessage(
+                env.CHANNEL_ID,
+                it.srcChatId,
+                it.srcMsgId,
+                extra
+              );
+
+              if (!posted && msg) posted = msg;
+              continue;
+            }
+
+            // фолбэк: если item старого формата (только text)
+            if (it?.text && typeof it.text === "string") {
+              const msg = await ctx.telegram.sendMessage(
+                env.CHANNEL_ID,
+                it.text,
+                {
+                  parse_mode: "HTML",
+                  disable_web_page_preview: true,
+                  ...(posted?.message_id
+                    ? { reply_to_message_id: posted.message_id }
+                    : {}),
+                }
+              );
+              if (!posted && msg) posted = msg;
+            }
+          }
+        }
+
+        // фолбэк: если вдруг не удалось собрать публикацию из items
+        if (!posted) {
+          const originalText = ctx.callbackQuery.message.text || "";
+          posted = await ctx.telegram.sendMessage(env.CHANNEL_ID, originalText, {
+            parse_mode: "HTML",
+            disable_web_page_preview: true,
           });
         }
 
@@ -150,25 +169,56 @@ export function registerCallbackHandlers(bot, env) {
         const postLink = `https://t.me/c/${internalId}/${posted.message_id}`;
         const anonLink = `https://t.me/${env.BOT_USERNAME}?start=anon_${posted.message_id}`;
 
-        const finalText =
-          `${originalText}\n\n<a href="${anonLink}">💬 Ответить анонимно</a>`;
-
-        await ctx.telegram.editMessageText(
-          env.CHANNEL_ID,
-          posted.message_id,
-          undefined,
-          finalText,
-          { parse_mode: "HTML", disable_web_page_preview: true }
-        );
+        // ✅ Добавляем ссылку "Ответить анонимно".
+        // Для текстовых постов — редактируем текст, для медиа — редактируем caption,
+        // иначе отправляем отдельным сообщением-реплаем.
+        const linkLine = `<a href="${anonLink}">💬 Ответить анонимно</a>`;
+        try {
+          if (posted?.text) {
+            const finalText = `${posted.text}\n\n${linkLine}`;
+            await ctx.telegram.editMessageText(
+              env.CHANNEL_ID,
+              posted.message_id,
+              undefined,
+              finalText,
+              { parse_mode: "HTML", disable_web_page_preview: true }
+            );
+          } else if (Object.prototype.hasOwnProperty.call(posted || {}, "caption")) {
+            const base = posted.caption || "";
+            const finalCaption = base ? `${base}\n\n${linkLine}` : linkLine;
+            await ctx.telegram.editMessageCaption(
+              env.CHANNEL_ID,
+              posted.message_id,
+              undefined,
+              finalCaption,
+              { parse_mode: "HTML" }
+            );
+          } else {
+            await ctx.telegram.sendMessage(env.CHANNEL_ID, linkLine, {
+              parse_mode: "HTML",
+              reply_to_message_id: posted.message_id,
+              disable_web_page_preview: true,
+            });
+          }
+        } catch (e) {
+          console.error("Failed to attach anon link:", e);
+        }
 
         await ctx.telegram.sendMessage(
           submission.authorId,
           `✅ Ваша тема опубликована!\n\n🔗 ${postLink}`
         );
 
-        pendingSubmissions.delete(msg.message_id);
+        pendingSubmissions.delete(ctx.callbackQuery.message.message_id);
 
-        await safeClearReplyMarkup(ctx);
+        // ✅ Косметический баг: editMessageReplyMarkup() без message_id → TelegramError 400.
+        // Убираем кнопки с того сообщения, по которому нажали.
+        await ctx.telegram.editMessageReplyMarkup(
+          ctx.callbackQuery.message.chat.id,
+          ctx.callbackQuery.message.message_id,
+          undefined,
+          { inline_keyboard: [] }
+        );
         await ctx.answerCbQuery("Опубликовано");
         return;
       }
@@ -177,26 +227,26 @@ export function registerCallbackHandlers(bot, env) {
       // ОТКЛОНЕНИЕ
       // =========================
       if (type === "reject") {
-        const msg = ctx.callbackQuery.message;
-        if (!msg) {
-          await ctx.answerCbQuery("Сообщение устарело");
-          return;
-        }
+        const submission = pendingSubmissions.get(
+          ctx.callbackQuery.message.message_id
+        );
 
-        const submission = pendingSubmissions.get(msg.message_id);
         if (submission) {
-          pendingRejections.set(msg.message_id, submission);
+          // Сохраняем, что ждём причину (для фолбэка по adminId)
+          pendingRejections.set(ctx.callbackQuery.message.message_id, submission);
           pendingRejectionsByAdmin.set(userId, submission);
 
+          // ✅ ВАЖНО: просьбу о причине пишем ТОЛЬКО в админ-чат (там где нажали "Отклонить")
           const prompt = await ctx.telegram.sendMessage(
-            msg.chat.id,
+            ctx.callbackQuery.message.chat.id,
             "✏️ Напишите причину отклонения ответом на это сообщение.",
             {
-              reply_to_message_id: msg.message_id,
+              reply_to_message_id: ctx.callbackQuery.message.message_id,
               reply_markup: { force_reply: true },
             }
           );
 
+          // На случай, если Telegram-клиент ответит именно на этот prompt — тоже сохраняем.
           if (prompt?.message_id) {
             pendingRejections.set(prompt.message_id, submission);
           }

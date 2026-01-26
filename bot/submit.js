@@ -99,9 +99,28 @@ export async function submitDraftToModeration(
     `Имя: ${[user.first_name, user.last_name].filter(Boolean).join(" ") || "—"}\n` +
     `Тип обращения: ${intentLabel(intent)}`;
 
-  await telegram.sendMessage(ADMIN_CHAT_ID, info);
+  const infoMsg = await telegram.sendMessage(ADMIN_CHAT_ID, info);
 
   const items = draft.items || [];
+
+  // ✅ ВАЖНО: если в черновике есть медиа/сообщения, копируем их в админ-чат.
+  // Иначе админ увидит только текст, а вложения «пропадут».
+  if (infoMsg?.message_id && items.length) {
+    for (const it of items) {
+      if (!it?.srcChatId || !it?.srcMsgId) continue;
+      try {
+        await telegram.copyMessage(
+          ADMIN_CHAT_ID,
+          it.srcChatId,
+          it.srcMsgId,
+          { reply_to_message_id: infoMsg.message_id }
+        );
+      } catch (e) {
+        console.error("copyMessage to admin failed:", e);
+      }
+    }
+  }
+
   const textSegments = items
     .map(it => ({ text: it.text || "", entities: it.entities || [] }))
     .filter(s => s.text && s.text.trim().length > 0);
@@ -113,12 +132,13 @@ export async function submitDraftToModeration(
     body ? header.length + 2 : 0
   );
 
-  // Превью в админке
+  // Превью в админке + кнопки
   const preview = await telegram.sendMessage(
     ADMIN_CHAT_ID,
     combined,
     {
       entities: finalEntities,
+      reply_to_message_id: infoMsg?.message_id,
       reply_markup: {
         inline_keyboard: [
           [

@@ -16,20 +16,20 @@ import {
 
 function detectContentMeta(msg) {
   if ("text" in msg)
-    return { kind: "text", supportsCaption: false, text: msg.text || "", entities: msg.entities || [] };
+    return { kind: "text", supportsCaption: false };
   if (msg.photo)
-    return { kind: "photo", supportsCaption: true, text: msg.caption || "", entities: msg.caption_entities || [] };
+    return { kind: "photo", supportsCaption: true };
   if (msg.video)
-    return { kind: "video", supportsCaption: true, text: msg.caption || "", entities: msg.caption_entities || [] };
+    return { kind: "video", supportsCaption: true };
   if (msg.animation)
-    return { kind: "animation", supportsCaption: true, text: msg.caption || "", entities: msg.caption_entities || [] };
+    return { kind: "animation", supportsCaption: true };
   if (msg.document)
-    return { kind: "document", supportsCaption: true, text: msg.caption || "", entities: msg.caption_entities || [] };
+    return { kind: "document", supportsCaption: true };
   if (msg.audio)
-    return { kind: "audio", supportsCaption: true, text: msg.caption || "", entities: msg.caption_entities || [] };
+    return { kind: "audio", supportsCaption: true };
   if (msg.voice)
-    return { kind: "voice", supportsCaption: true, text: msg.caption || "", entities: msg.caption_entities || [] };
-  return { kind: "other", supportsCaption: false, text: "", entities: [] };
+    return { kind: "voice", supportsCaption: true };
+  return { kind: "other", supportsCaption: false };
 }
 
 export function registerModerationHandlers(bot, env) {
@@ -56,6 +56,7 @@ export function registerModerationHandlers(bot, env) {
 
   bot.on("message", async (ctx, next) => {
     try {
+      // ответы админа при отклонении
       if (String(ctx.chat?.id) === String(ADMIN_CHAT_ID)) {
         const replyTo = ctx.message?.reply_to_message;
         if (replyTo) {
@@ -74,6 +75,7 @@ export function registerModerationHandlers(bot, env) {
 
       const uid = ctx.from.id;
 
+      // начало создания темы
       if (awaitingTopic.has(uid)) {
         if (!(await isMember(ctx, CHANNEL_ID))) {
           awaitingTopic.delete(uid);
@@ -82,27 +84,30 @@ export function registerModerationHandlers(bot, env) {
         }
 
         awaitingTopic.delete(uid);
-        const meta = detectContentMeta(ctx.message);
 
         pendingDrafts.set(uid, {
-          items: [{ srcChatId: ctx.chat.id, srcMsgId: ctx.message.message_id, ...meta }]
+          items: [{ srcChatId: ctx.chat.id, srcMsgId: ctx.message.message_id }]
         });
 
         await ctx.reply(
-          "Принято. Можете добавить ещё текст/медиа.\nКогда закончите — нажмите «✅ Готово».",
+          "Принято. Можете добавить ещё текст или медиа.\nКогда закончите — нажмите «✅ Готово».",
           composeKeyboard()
         );
         return;
       }
 
+      // добавление сообщений в draft
       if (pendingDrafts.has(uid) && !awaitingIntent.has(uid)) {
-        const meta = detectContentMeta(ctx.message);
         const session = pendingDrafts.get(uid);
-        session.items.push({ srcChatId: ctx.chat.id, srcMsgId: ctx.message.message_id, ...meta });
+        session.items.push({
+          srcChatId: ctx.chat.id,
+          srcMsgId: ctx.message.message_id
+        });
         await ctx.reply("Добавлено. Нажмите «✅ Готово», когда закончите.", composeKeyboard());
         return;
       }
 
+      // выбор типа публикации
       if (pendingDrafts.has(uid) && awaitingIntent.has(uid) && "text" in ctx.message) {
         const t = (ctx.message.text || "").trim();
         if (t === "1" || t === "2") {
