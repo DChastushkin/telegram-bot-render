@@ -1,4 +1,3 @@
-// index.js
 import "dotenv/config";
 import express from "express";
 import { createBot } from "./bot/index.js";
@@ -69,12 +68,15 @@ bot.on("message", (ctx, next) => {
 
 // ===== APP =====
 const app = express();
+
+// ❗ ВАЖНО: webhookCallback ДО express.json
+app.use(bot.webhookCallback(WEBHOOK_PATH));
+
+// обычные JSON-роуты — после
 app.use(express.json({ limit: "2mb" }));
 
 app.get("/", (_, res) => res.send("ok"));
 app.get("/health", (_, res) => res.send("ok"));
-
-app.use(bot.webhookCallback(WEBHOOK_PATH));
 
 // ===== START =====
 app.listen(PORT, async () => {
@@ -82,5 +84,6 @@ app.listen(PORT, async () => {
 
   await bot.telegram.deleteWebhook({ drop_pending_updates: true });
   await bot.telegram.setWebhook(WEBHOOK_URL);
+
   console.log(`✅ Webhook set to ${WEBHOOK_URL}`);
 });
