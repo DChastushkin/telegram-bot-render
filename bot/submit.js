@@ -103,8 +103,7 @@ export async function submitDraftToModeration(
 
   const items = draft.items || [];
 
-  // ✅ FIX: отправляем в админ-чат все исходные сообщения (включая медиа).
-  // В draft.items медиа хранится как { srcChatId, srcMsgId }.
+  // медиа-превью в админке
   if (infoMsg?.message_id && items.length) {
     for (const it of items) {
       if (!it?.srcChatId || !it?.srcMsgId) continue;
@@ -132,7 +131,6 @@ export async function submitDraftToModeration(
     body ? header.length + 2 : 0
   );
 
-  // Превью в админке
   const preview = await telegram.sendMessage(
     ADMIN_CHAT_ID,
     combined,
@@ -159,14 +157,19 @@ export async function submitDraftToModeration(
 }
 
 /* =====================================================
- * 📢 ПУБЛИКАЦИЯ В КАНАЛ (БЕЗ copyMessage!)
+ * 📢 ПУБЛИКАЦИЯ В КАНАЛ
  * ===================================================== */
 
+/**
+ * FIX:
+ * Эта функция используется ТОЛЬКО для чисто текстовых постов.
+ * Если пост уже опубликован через copyMessage (медиа),
+ * её вызывать НЕЛЬЗЯ — иначе будет дубликат.
+ */
 export async function publishToChannel(
   { telegram, CHANNEL_ID, BOT_USERNAME },
   { text }
 ) {
-  // сначала публикуем БЕЗ ссылки
   const sent = await telegram.sendMessage(
     CHANNEL_ID,
     text,
@@ -176,7 +179,6 @@ export async function publishToChannel(
   const channelMsgId = sent.message_id;
   const anonLink = `https://t.me/${BOT_USERNAME}?start=anon_${channelMsgId}`;
 
-  // теперь редактируем, добавляя HTML-якорь
   const finalText = `${text}\n\n<a href="${anonLink}">Ответить анонимно</a>`;
 
   await telegram.editMessageText(
