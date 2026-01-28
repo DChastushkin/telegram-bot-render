@@ -39,7 +39,6 @@ export function registerCallbackHandlers(bot, env) {
 
         const intent = data.v; // "advice" | "express"
 
-        // отправляем на модерацию
         await submitDraftToModeration(
           {
             telegram: ctx.telegram,
@@ -54,11 +53,9 @@ export function registerCallbackHandlers(bot, env) {
           }
         );
 
-        // чистим состояние
         pendingDrafts.delete(userId);
         awaitingIntent.delete(userId);
 
-        // подтверждение пользователю
         await ctx.editMessageText(
           "✅ Тема отправлена на модерацию.\nМы уведомим вас после проверки."
         );
@@ -76,10 +73,8 @@ export function registerCallbackHandlers(bot, env) {
           return;
         }
 
-        // помечаем, что ждём выбор типа (значение тут не важно — важно .has)
         awaitingIntent.set(userId, "pending");
 
-        // показываем выбор
         await ctx.editMessageText(
           "Выберите, что это:\n\n🧭 Нужен совет\n💬 Хочу высказаться",
           choiceKeyboard()
@@ -113,7 +108,6 @@ export function registerCallbackHandlers(bot, env) {
         const originalText = ctx.callbackQuery.message.text;
         const items = Array.isArray(submission.items) ? submission.items : [];
 
-        // ✅ Публикуем в канал: если есть исходные сообщения (включая медиа) — копируем их.
         let firstPosted = null;
         let lastMsgId = null;
 
@@ -137,7 +131,6 @@ export function registerCallbackHandlers(bot, env) {
           }
         }
 
-        // Фолбэк: если копировать нечего/не получилось — публикуем текстом как раньше.
         if (!firstPosted) {
           firstPosted = await ctx.telegram.sendMessage(
             env.CHANNEL_ID,
@@ -147,7 +140,6 @@ export function registerCallbackHandlers(bot, env) {
           lastMsgId = firstPosted.message_id;
         }
 
-        // (оставляем как было у тебя — если работает, не трогаем)
         if (firstPosted.message_thread_id) {
           channelToDiscussion.set(firstPosted.message_id, {
             discussionChatId: env.CHANNEL_ID,
@@ -162,15 +154,29 @@ export function registerCallbackHandlers(bot, env) {
         const postLink = `https://t.me/c/${internalId}/${firstPosted.message_id}`;
         const anonLink = `https://t.me/${env.BOT_USERNAME}?start=anon_${firstPosted.message_id}`;
 
-        // ✅ Ссылка на анонимный ответ. Для медиа-поста безопаснее отправить отдельным сообщением-реплаем.
+        // 🔧 FIX: добавляем anon-link ВНУТРЬ канонического поста, без второго сообщения
         try {
-          await ctx.telegram.sendMessage(
-            env.CHANNEL_ID,
-            `<a href="${anonLink}">💬 Ответить анонимно</a>`,
-            { parse_mode: "HTML", disable_web_page_preview: true, reply_to_message_id: firstPosted.message_id }
-          );
+          if (firstPosted.caption !== undefined) {
+            const caption = `${firstPosted.caption || ""}\n\n💬 <a href="${anonLink}">Ответить анонимно</a>`;
+            await ctx.telegram.editMessageCaption(
+              env.CHANNEL_ID,
+              firstPosted.message_id,
+              undefined,
+              caption,
+              { parse_mode: "HTML" }
+            );
+          } else {
+            const text = `${firstPosted.text || ""}\n\n💬 <a href="${anonLink}">Ответить анонимно</a>`;
+            await ctx.telegram.editMessageText(
+              env.CHANNEL_ID,
+              firstPosted.message_id,
+              undefined,
+              text,
+              { parse_mode: "HTML", disable_web_page_preview: true }
+            );
+          }
         } catch (e) {
-          console.error("failed to send anon link:", e);
+          console.error("failed to attach anon link:", e);
         }
 
         await ctx.telegram.sendMessage(
@@ -180,7 +186,6 @@ export function registerCallbackHandlers(bot, env) {
 
         pendingSubmissions.delete(ctx.callbackQuery.message.message_id);
 
-        // ✅ Убираем кнопки с карточки модерации (фикс TelegramError 400 без message_id)
         try {
           if (ctx.callbackQuery?.message) {
             await ctx.telegram.editMessageReplyMarkup(
@@ -207,11 +212,9 @@ export function registerCallbackHandlers(bot, env) {
         );
 
         if (submission) {
-          // Сохраняем, что ждём причину (для фолбэка по adminId)
           pendingRejections.set(ctx.callbackQuery.message.message_id, submission);
           pendingRejectionsByAdmin.set(userId, submission);
 
-          // ✅ ВАЖНО: просьбу о причине пишем ТОЛЬКО в админ-чат (там где нажали "Отклонить")
           const prompt = await ctx.telegram.sendMessage(
             ctx.callbackQuery.message.chat.id,
             "✏️ Напишите причину отклонения ответом на это сообщение.",
@@ -221,7 +224,6 @@ export function registerCallbackHandlers(bot, env) {
             }
           );
 
-          // На случай, если Telegram-клиент ответит именно на этот prompt — тоже сохраняем.
           if (prompt?.message_id) {
             pendingRejections.set(prompt.message_id, submission);
           }
