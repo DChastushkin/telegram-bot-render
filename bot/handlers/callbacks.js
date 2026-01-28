@@ -10,6 +10,24 @@ import {
 import { submitDraftToModeration } from "../submit.js";
 import { choiceKeyboard } from "../ui.js";
 
+/**
+ * Безопасное редактирование callback-сообщения.
+ * Если message отсутствует — ничего не ломаем.
+ */
+async function safeEditMessageText(ctx, text, extra) {
+  if (ctx.callbackQuery?.message) {
+    return ctx.editMessageText(text, extra);
+  }
+  return ctx.answerCbQuery();
+}
+
+async function safeClearReplyMarkup(ctx) {
+  if (ctx.callbackQuery?.message) {
+    return ctx.editMessageReplyMarkup();
+  }
+  return ctx.answerCbQuery();
+}
+
 export function registerCallbackHandlers(bot, env) {
   bot.on("callback_query", async (ctx) => {
     try {
@@ -39,24 +57,38 @@ export function registerCallbackHandlers(bot, env) {
 
         const intent = data.v; // "advice" | "express"
 
-        await submitDraftToModeration(
-          {
-            telegram: ctx.telegram,
-            ADMIN_CHAT_ID: env.ADMIN_CHAT_ID,
-            CHANNEL_ID: env.CHANNEL_ID,
-            BOT_USERNAME: env.BOT_USERNAME,
-          },
-          {
-            user: ctx.from,
-            draft,
-            intent,
-          }
-        );
+        // важное логирование, чтобы больше не гадать "дошло/не дошло"
+        console.error("🧾 CHOOSE -> submitDraftToModeration", { userId, intent });
+
+        try {
+          await submitDraftToModeration(
+            {
+              telegram: ctx.telegram,
+              ADMIN_CHAT_ID: env.ADMIN_CHAT_ID,
+              CHANNEL_ID: env.CHANNEL_ID,
+              BOT_USERNAME: env.BOT_USERNAME,
+            },
+            {
+              user: ctx.from,
+              draft,
+              intent,
+            }
+          );
+        } catch (e) {
+          console.error("submitDraftToModeration failed:", e);
+          await ctx.answerCbQuery("Ошибка отправки в модерацию");
+          await safeEditMessageText(
+            ctx,
+            "❌ Не удалось отправить на модерацию. Попробуйте ещё раз."
+          );
+          return;
+        }
 
         pendingDrafts.delete(userId);
         awaitingIntent.delete(userId);
 
-        await ctx.editMessageText(
+        await safeEditMessageText(
+          ctx,
           "✅ Тема отправлена на модерацию.\nМы уведомим вас после проверки."
         );
         return;
@@ -75,7 +107,8 @@ export function registerCallbackHandlers(bot, env) {
 
         awaitingIntent.set(userId, "pending");
 
-        await ctx.editMessageText(
+        await safeEditMessageText(
+          ctx,
           "Выберите, что это:\n\n🧭 Нужен совет\n💬 Хочу высказаться",
           choiceKeyboard()
         );
@@ -88,7 +121,7 @@ export function registerCallbackHandlers(bot, env) {
       if (type === "compose_cancel") {
         pendingDrafts.delete(userId);
         awaitingIntent.delete(userId);
-        await ctx.editMessageText("❌ Отменено.");
+        await safeEditMessageText(ctx, "❌ Отменено.");
         return;
       }
 
@@ -96,34 +129,35 @@ export function registerCallbackHandlers(bot, env) {
       // ПУБЛИКАЦИЯ (АДМИН)
       // =========================
       if (type === "publish") {
-        const submission = pendingSubmissions.get(
-          ctx.callbackQuery.message.message_id
-        );
+        const msg = ctx.callbackQuery.message;
+        if (!msg) {
+          await ctx.answerCbQuery("Сообщение устарело");
+          return;
+        }
 
+        const submission = pendingSubmissions.get(msg.message_id);
         if (!submission) {
           await ctx.answerCbQuery("Черновик не найден");
           return;
         }
 
-        const originalText = ctx.callbackQuery.message.text;
         const items = Array.isArray(submission.items) ? submission.items : [];
 
-        let firstPosted = null;
-        let lastMsgId = null;
+        // 1) Публикуем в канал: если есть медиа/сообщения пользователя — копируем их (первое копирование = канонический пост).
+        //    Если items пустой — публикуем текст из админ-сообщения как обычный пост.
+        let firstPostedId = null;
 
         if (items.length) {
           for (const it of items) {
             if (!it?.srcChatId || !it?.srcMsgId) continue;
             try {
-              const msg = await ctx.telegram.copyMessage(
+              const res = await ctx.telegram.copyMessage(
                 env.CHANNEL_ID,
                 it.srcChatId,
-                it.srcMsgId,
-                lastMsgId ? { reply_to_message_id: lastMsgId } : {}
+                it.srcMsgId
               );
-              if (msg?.message_id) {
-                if (!firstPosted) firstPosted = msg;
-                lastMsgId = msg.message_id;
+              if (!firstPostedId && res?.message_id) {
+                firstPostedId = res.message_id;
               }
             } catch (e) {
               console.error("copyMessage to channel failed:", e);
@@ -131,74 +165,50 @@ export function registerCallbackHandlers(bot, env) {
           }
         }
 
-        if (!firstPosted) {
-          firstPosted = await ctx.telegram.sendMessage(
+        if (!firstPostedId) {
+          const originalText = msg.text || "";
+          const posted = await ctx.telegram.sendMessage(
             env.CHANNEL_ID,
             originalText,
             { parse_mode: "HTML", disable_web_page_preview: true }
           );
-          lastMsgId = firstPosted.message_id;
-        }
-
-        if (firstPosted.message_thread_id) {
-          channelToDiscussion.set(firstPosted.message_id, {
-            discussionChatId: env.CHANNEL_ID,
-            discussionMsgId: firstPosted.message_thread_id,
-          });
+          firstPostedId = posted.message_id;
         }
 
         const internalId = String(env.CHANNEL_ID).startsWith("-100")
           ? String(env.CHANNEL_ID).slice(4)
           : String(Math.abs(env.CHANNEL_ID));
 
-        const postLink = `https://t.me/c/${internalId}/${firstPosted.message_id}`;
-        const anonLink = `https://t.me/${env.BOT_USERNAME}?start=anon_${firstPosted.message_id}`;
+        const postLink = `https://t.me/c/${internalId}/${firstPostedId}`;
+        const anonLink = `https://t.me/${env.BOT_USERNAME}?start=anon_${firstPostedId}`;
 
-        // 🔧 FIX: добавляем anon-link ВНУТРЬ канонического поста, без второго сообщения
+        // 2) Кнопка "Ответить анонимно" ПОД каноническим постом (без второго сообщения)
         try {
-          if (firstPosted.caption !== undefined) {
-            const caption = `${firstPosted.caption || ""}\n\n💬 <a href="${anonLink}">Ответить анонимно</a>`;
-            await ctx.telegram.editMessageCaption(
-              env.CHANNEL_ID,
-              firstPosted.message_id,
-              undefined,
-              caption,
-              { parse_mode: "HTML" }
-            );
-          } else {
-            const text = `${firstPosted.text || ""}\n\n💬 <a href="${anonLink}">Ответить анонимно</a>`;
-            await ctx.telegram.editMessageText(
-              env.CHANNEL_ID,
-              firstPosted.message_id,
-              undefined,
-              text,
-              { parse_mode: "HTML", disable_web_page_preview: true }
-            );
-          }
+          await ctx.telegram.editMessageReplyMarkup(
+            env.CHANNEL_ID,
+            firstPostedId,
+            undefined,
+            {
+              inline_keyboard: [[{ text: "💬 Ответить анонимно", url: anonLink }]],
+            }
+          );
         } catch (e) {
-          console.error("failed to attach anon link:", e);
+          console.error("attach anon button failed:", e);
         }
 
-        await ctx.telegram.sendMessage(
-          submission.authorId,
-          `✅ Ваша тема опубликована!\n\n🔗 ${postLink}`
-        );
-
-        pendingSubmissions.delete(ctx.callbackQuery.message.message_id);
-
+        // 3) Уведомляем автора
         try {
-          if (ctx.callbackQuery?.message) {
-            await ctx.telegram.editMessageReplyMarkup(
-              ctx.callbackQuery.message.chat.id,
-              ctx.callbackQuery.message.message_id,
-              undefined,
-              { inline_keyboard: [] }
-            );
-          }
+          await ctx.telegram.sendMessage(
+            submission.authorId,
+            `✅ Ваша тема опубликована!\n\n🔗 ${postLink}`
+          );
         } catch (e) {
-          console.error("editMessageReplyMarkup failed:", e);
+          console.error("notify author failed:", e);
         }
 
+        pendingSubmissions.delete(msg.message_id);
+
+        await safeClearReplyMarkup(ctx);
         await ctx.answerCbQuery("Опубликовано");
         return;
       }
@@ -207,19 +217,22 @@ export function registerCallbackHandlers(bot, env) {
       // ОТКЛОНЕНИЕ
       // =========================
       if (type === "reject") {
-        const submission = pendingSubmissions.get(
-          ctx.callbackQuery.message.message_id
-        );
+        const msg = ctx.callbackQuery.message;
+        if (!msg) {
+          await ctx.answerCbQuery("Сообщение устарело");
+          return;
+        }
 
+        const submission = pendingSubmissions.get(msg.message_id);
         if (submission) {
-          pendingRejections.set(ctx.callbackQuery.message.message_id, submission);
+          pendingRejections.set(msg.message_id, submission);
           pendingRejectionsByAdmin.set(userId, submission);
 
           const prompt = await ctx.telegram.sendMessage(
-            ctx.callbackQuery.message.chat.id,
+            msg.chat.id,
             "✏️ Напишите причину отклонения ответом на это сообщение.",
             {
-              reply_to_message_id: ctx.callbackQuery.message.message_id,
+              reply_to_message_id: msg.message_id,
               reply_markup: { force_reply: true },
             }
           );
