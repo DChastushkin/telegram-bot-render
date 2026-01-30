@@ -112,7 +112,18 @@ export function registerModerationHandlers(bot, env) {
         pendingDrafts.set(uid, {
           items: [{
             srcChatId: ctx.chat.id,
-            srcMsgId: msg.message_id
+            srcMsgId: msg.message_id,
+            kind: ("text" in msg) ? "text" :
+              (msg.photo ? "photo" :
+              (msg.video ? "video" :
+              (msg.animation ? "animation" :
+              (msg.document ? "document" :
+              (msg.audio ? "audio" :
+              (msg.voice ? "voice" : "other")))))),
+            text: ("text" in msg) ? (msg.text || "") : undefined,
+            entities: ("text" in msg) ? (msg.entities || []) : undefined,
+            caption: (!("text" in msg)) ? (msg.caption || "") : undefined,
+            caption_entities: (!("text" in msg)) ? (msg.caption_entities || []) : undefined
           }]
         });
 
@@ -139,7 +150,18 @@ export function registerModerationHandlers(bot, env) {
 
         session.items.push({
           srcChatId: ctx.chat.id,
-          srcMsgId: msg.message_id
+          srcMsgId: msg.message_id,
+          kind: ("text" in msg) ? "text" :
+            (msg.photo ? "photo" :
+            (msg.video ? "video" :
+            (msg.animation ? "animation" :
+            (msg.document ? "document" :
+            (msg.audio ? "audio" :
+            (msg.voice ? "voice" : "other")))))),
+          text: ("text" in msg) ? (msg.text || "") : undefined,
+          entities: ("text" in msg) ? (msg.entities || []) : undefined,
+          caption: (!("text" in msg)) ? (msg.caption || "") : undefined,
+          caption_entities: (!("text" in msg)) ? (msg.caption_entities || []) : undefined
         });
 
         console.log("[MODERATION][DRAFT_PUSH_AFTER]", {
